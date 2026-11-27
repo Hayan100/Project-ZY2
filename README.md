@@ -295,3 +295,14 @@ All routes below start at `/api/v1`. Run the migrations and apply `backend/curri
 | Invite | From a desk, POST `/library/rooms/:id/invite` with `{peer}` for a current family member or accepted friend. A moderator can seed an invitation-only room. Invitations last one day. Current family members and their Ghazi may join one another above normal capacity up to the ceiling. |
 | Study | Game and list clients GET the same `/library/desks/:id` session. Poll within the 90-second presence lease. PUT `/focus` with minutes, or zero to stop. Repeating an active timer preserves its deadline. PUT `/resource` with a published accessible course/lesson pair or an eligible ebook ID. Each student’s timer and resource remain private. DELETE the desk to leave. |
 | Talk in a social instance | GET/POST `/library/desks/:id/chat` with text. PUT `/voice` with `{enabled}` to join or leave optional audio. Post addressed offer, answer and ICE messages to `/signals`, and poll that path with `after`. Use the existing TURN configuration. Clients stop microphone tracks and close connections when muted, blocked, moved, disconnected or no longer authorized. Quiet rooms have no social transport. The API does not record audio. |
+
+### Private support tickets
+
+Community returns the ticket inbox as its default support destination. A verified student can use it even when paid access has expired. Apply migration 15 and the curriculum grants. As the database owner, assign staff to categories in `support_reviewers(reviewer,category,senior)`. Service complaints require designated senior reviewers. A reported staff member and the ticket author are excluded from the staff view of that ticket.
+
+| Action | API under `/api/v1` |
+| --- | --- |
+| Open a ticket | POST `/support/tickets` with a client UUID `id`, `category` (`access_payment`, `technical`, or `service_complaint`), `subject`, and `description`. Complaints may identify a staff member with `reportedStaff`. Repeating the same request returns the same ticket. |
+| Track or review | GET `/support/tickets` for your own tickets or `/staff/support/tickets` for your assigned categories. Append `/:id` for the description and chronological history. |
+| Work a ticket | POST `/:id/events` under either inbox with the current `version`, an `action`, and a student-visible `message`. Students can reply or reopen. Eligible staff can also claim, escalate or resolve. A claim transfers assignment and records who took over. Escalation releases the assignment to the senior queue and requires another eligible senior reviewer. |
+| Handle a conflict | A stale edit returns 409. Refresh the thread before revising the request. Repeating an identical accepted event returns its recorded version while the caller retains access. |

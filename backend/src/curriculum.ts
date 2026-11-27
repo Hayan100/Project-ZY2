@@ -1,4 +1,5 @@
 import { registerCommunity } from "./community.ts";
+import { registerSupport } from "./support.ts";
 import { registerLive } from "./live.ts";
 import { registerFamilies } from "./family.ts";
 import { registerWelcome } from "./welcome.ts";
@@ -107,5 +108,6 @@ export function registerCurriculum(app: FastifyInstance, db: Pool, principal: Id
   registerFamilies(app,session);
   registerLive(app,session,academic);
   registerCommunity(app,session,accessible);
+  registerSupport(app,session);
   registerPlanner(app,session,academic,accessible,revisionSummary);
 }

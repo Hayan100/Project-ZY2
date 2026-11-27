@@ -61,3 +61,6 @@ GRANT UPDATE(verified_by,removed) ON community_posts TO zy2_api;
 GRANT UPDATE(session_id,space,instance,seen,focus_start,focus_end,course,lesson,ebook,voice) ON library_desks TO zy2_api;
 GRANT DELETE ON library_desks,library_signals,space_follows,community_blocks TO zy2_api;
 GRANT UPDATE(appeal,decision,reviewer,overturned) ON community_actions TO zy2_api;
+GRANT SELECT ON support_reviewers TO zy2_api;
+GRANT SELECT,INSERT ON support_tickets,support_events TO zy2_api;
+GRANT UPDATE(assignee,escalated,resolved,version,updated_at) ON support_tickets TO zy2_api;
