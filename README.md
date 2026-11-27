@@ -317,3 +317,13 @@ Community exposes the board through `featureBoard`. Apply migration 16 and the c
 | Browse | GET `/feature-suggestions`. Moderators can GET `/staff/feature-suggestions` to include all submissions. Use the response’s `next` UUID as `?after=` for the next page. |
 | Vote or withdraw | PUT `/feature-suggestions/:id/vote` with `{"voted":true}` or `{"voted":false}`. Each account has one vote per published idea. |
 | Review | A Community moderator PUTs `/staff/feature-suggestions/:id/status` with the current `version` and a `status` of `under_review`, `planned`, `in_progress`, `delivered`, or `declined`. The first four statuses publish the idea. Refresh after a 409 stale update. |
+
+### Moderated resource submissions
+
+Apply migration 17 and the curriculum grants. Text and links in Community channels of kind `resources` use the existing post IDs and channel access checks. Existing posts in these channels enter the pending queue on upgrade.
+
+| Action | API under `/api/v1` |
+| --- | --- |
+| Submit and track | POST `/community/channels/:id/posts` with a client UUID and text, then GET `/community/channels/:id/submissions/:post` for your review status. Replies use an approved parent and go through review individually. |
+| Review | Community moderators GET `/staff/community/resources`. The default queue is pending. Filter by `status` and pass the returned `next` UUID as `after` to paginate. A moderator other than the author PUTs `/staff/community/resources/:post` with the current `version` and status `approved` or `declined`. Refresh after a stale edit returns 409. |
+| Find a resource | GET the channel’s existing posts endpoint with an optional `q` search. Approval makes the original post visible to eligible channel members. Declining or removing the parent hides it and its replies. |

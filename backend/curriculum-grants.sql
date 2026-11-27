@@ -67,3 +67,6 @@ GRANT UPDATE(assignee,escalated,resolved,version,updated_at) ON support_tickets 
 GRANT SELECT,INSERT ON feature_suggestions,feature_votes TO zy2_api;
 GRANT UPDATE(status,version,reviewed_by) ON feature_suggestions TO zy2_api;
 GRANT DELETE ON feature_votes TO zy2_api;
+GRANT SELECT,INSERT ON resource_reviews TO zy2_api;
+GRANT UPDATE(status,reviewer,version) ON resource_reviews TO zy2_api;
+GRANT SELECT ON published_resource_posts TO zy2_api;

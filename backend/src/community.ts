@@ -85,6 +85,7 @@ export function registerCommunity(app:FastifyInstance,session:Session,accessible
   async function posts(tx:PoolClient,scope:string,id:string,user:string,search?:string,before?:string) {
     const rows=(await tx.query(`SELECT p.id,p.author,p.body,p.remote_id,p.created,p.parent,p.verified_by,s.stoat_channel FROM community_posts p
       LEFT JOIN shared_spaces s ON s.id=p.space WHERE p.${scope}=$1 AND NOT p.removed AND
+      (s.kind IS DISTINCT FROM 'resources' OR p.id IN (SELECT id FROM published_resource_posts)) AND
       NOT EXISTS(SELECT FROM community_blocks WHERE (actor,peer) IN (($2,p.author),(p.author,$2))) AND
       ($3::text IS NULL OR strpos(lower(p.body),lower($3))>0) AND ($4::uuid IS NULL OR (p.created,p.id)<
       (SELECT created,id FROM community_posts WHERE id=$4 AND ${scope}=$1)) ORDER BY p.created DESC,p.id DESC LIMIT 30`,[id,user,search,before])).rows;
@@ -119,10 +120,14 @@ export function registerCommunity(app:FastifyInstance,session:Session,accessible
       const c=scope==="space"?await getChannel(tx,a.id,id):null;
       if(scope==="dm") await peer(tx,a.id,id);
       if(c?.kind==="announcements") await moderator(tx,a.id);
+      if(c?.kind==="resources" && b.parent && !(await tx.query("SELECT FROM published_resource_posts WHERE id=$1",[b.parent])).rowCount) fail(404);
       if(b.parent && !(await tx.query(`SELECT FROM community_posts WHERE id=$1 AND ${scope}=$2 AND NOT removed AND parent IS NULL`,[b.parent,id])).rowCount) fail(404);
       await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1,41))",[b.id]);
-      const old=(await tx.query(`SELECT author,${scope} AS destination FROM community_posts WHERE id=$1`,[b.id])).rows[0];
-      if(old){if(old.author!==a.id||old.destination!==id) fail(409);return {id:b.id};}
+      const old=(await tx.query(`SELECT author,${scope} AS destination,body,parent FROM community_posts WHERE id=$1`,[b.id])).rows[0];
+      if(old){
+        if(old.author!==a.id || old.destination!==id || (c?.kind==="resources" && (old.body!==b.text || old.parent!==(b.parent??null)))) fail(409);
+        return {id:b.id};
+      }
       if(c && ["general","media"].includes(c.kind) && !c.stoat_channel) fail(503);
       const remote=c?.stoat_channel?await stoat(c.stoat_channel,undefined,b):null;
       await tx.query(`INSERT INTO community_posts(id,${scope},author,body,remote_id,parent) VALUES($1,$2,$3,$4,$5,$6)`,[b.id,id,a.id,remote?null:b.text,remote?._id,b.parent]);
@@ -165,7 +170,45 @@ export function registerCommunity(app:FastifyInstance,session:Session,accessible
     (await tx.query(`UPDATE community_posts p SET verified_by=$2 FROM shared_spaces s,doubt_staff d WHERE p.id=$1 AND p.space=s.id
       AND p.parent IS NOT NULL AND NOT p.removed AND d.subject=s.subject AND d.user_id=$2 RETURNING p.id`,[req.params.id,a.id])).rows[0]??fail(404)));
   registerModeration(app,session,getChannel,peer);
+  app.get<{Params:{id:string;post:string}}>(channel+"/submissions/:post",{schema:{params:obj({id:uuid,post:uuid})}},req=>session(req,async(tx,a)=>{
+    const c=await getChannel(tx,a.id,req.params.id);
+    if(c.kind!=="resources") fail(404);
+    return (await tx.query(`SELECT p.id,coalesce(r.status,'pending') AS status FROM community_posts p
+      LEFT JOIN resource_reviews r ON r.post=p.id WHERE p.id=$1 AND p.space=$2 AND p.author=$3 AND NOT p.removed`,
+      [req.params.post,c.id,a.id])).rows[0]??fail(404);
+  }));
+  registerResourceReviews(app,session);
   registerLibrary(app,session,accessible);
+}
+
+function registerResourceReviews(app:FastifyInstance,session:Session) {
+  const queue="/api/v1/staff/community/resources";
+  const source=`FROM community_posts p JOIN shared_spaces s ON s.id=p.space AND s.kind='resources'
+    LEFT JOIN resource_reviews r ON r.post=p.id WHERE NOT p.removed`;
+  app.get<{Querystring:{status?:string;after?:string}}>(queue,{schema:{querystring:obj({
+    status:{enum:["pending","approved","declined"]},after:uuid
+  },[])}},req=>session(req,async(tx,actor)=>{
+    await moderator(tx,actor.id);
+    const {rows}=await tx.query(`SELECT p.id,p.space,p.author,p.body,coalesce(r.status,'pending') AS status,
+      coalesce(r.version,0) AS version ${source} AND coalesce(r.status,'pending')=$1
+      AND ($2::uuid IS NULL OR p.id>$2) ORDER BY p.id LIMIT 51`,[req.query.status??"pending",req.query.after]);
+    return {resources:rows.slice(0,50),next:rows.length>50?rows[49].id:null};
+  }));
+  app.put<Path & {Body:{status:string;version:number}}>(queue+"/:id",{schema:{params,body:obj({
+    status:{enum:["approved","declined"]},version:{type:"integer",minimum:0,maximum:2147483646}
+  })}},req=>session(req,async(tx,actor)=>{
+    await moderator(tx,actor.id);
+    const id=req.params.id,{status,version}=req.body;
+    const post=(await tx.query(`SELECT p.author ${source} AND p.id=$1 FOR UPDATE OF p`,[id])).rows[0]??fail(404);
+    if(post.author===actor.id) fail(403);
+    const old=(await tx.query("SELECT * FROM resource_reviews WHERE post=$1",[id])).rows[0];
+    if(old?.reviewer===actor.id && old.status===status && old.version===version+1) return {id,status,version:old.version};
+    if((old?.version??0)!==version) fail(409);
+    await tx.query(`INSERT INTO resource_reviews(post,status,reviewer,version) VALUES($1,$2,$3,$4)
+      ON CONFLICT(post) DO UPDATE SET status=excluded.status,reviewer=excluded.reviewer,version=excluded.version`,
+      [id,status,actor.id,version+1]);
+    return {id,status,version:version+1};
+  }));
 }
 
 async function canReportPost(tx:PoolClient,user:string,id:string,channel:Access,dm:Access) {
