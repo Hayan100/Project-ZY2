@@ -54,6 +54,13 @@ test("published ebooks share stable pages and reading state across authorized en
   assert.deepEqual((await request("GET","me/saved",staff)).json().items,[]);
   assert.equal((await request("PUT",pagePath+"/reading"+context,student,{revision:1,studied:true})).statusCode,200);
   await enroll(libraryKey);
+  const home=async(q="")=>(await get("ebooks/home?q="+encodeURIComponent(q))).json();
+  const shelf=(await home("BOTANY")).myBooks[0];
+  assert.deepEqual([shelf.exam,shelf.subject],["MDCAT","Botany"]);
+  assert.deepEqual([shelf.books[0].href,shelf.books[0].visited,shelf.books[0].studied],["/api/v1/"+library,1,1]);
+  const filtered=await home("Physics");
+  assert.deepEqual(filtered.myBooks,[]);
+  assert.deepEqual(filtered.continueReading,{bookId:book,pageId:page.id,title:"Biology",href:"/api/v1/"+library});
   assert.deepEqual((await get("ebooks?q=botany")).json().ebooks,[{id:book,revision:1,title:"Biology",exam:"MDCAT",subject:"Botany",
     resumePageId:page.id,visited:1,studied:1,totalPages:1}]);
   assert.deepEqual((await get(library+"/search?q=CELLULOSE")).json().pages,[{id:page.id,title:page.title}]);
@@ -69,6 +76,7 @@ test("published ebooks share stable pages and reading state across authorized en
   assert.equal((await get(pagePath)).statusCode,404);
   assert.equal((await request("PUT",pagePath+"/reading",student,{revision:1})).statusCode,409);
   assert.equal((await get(library)).json().resumePageId,null);
+  assert.equal((await home()).continueReading,null);
   assert.equal((await replace(2,[replacement,page])).statusCode,200);
   assert.equal((await publish(3)).statusCode,200);
   assert.equal((await get(library)).json().resumePageId,page.id);
@@ -77,6 +85,7 @@ test("published ebooks share stable pages and reading state across authorized en
   assert.equal((await request("POST",courseStaff+"/publish",staff,{revision:2})).statusCode,200);
   assert.equal((await get(pagePath+context)).statusCode,403);
   await owner.query("UPDATE enrollments SET revoked_at=now() WHERE user_id=$1",[student]);
+  assert.deepEqual(await home(),{continueReading:null,myBooks:[]});
   assert.equal((await get(pagePath)).statusCode,404);
   assert.equal((await get(pagePath+context)).statusCode,404);
   assert.equal((await get(library+"/search?q=cell")).statusCode,404);

@@ -1,6 +1,6 @@
 import { familyStrip } from "./family.ts";
 import { welcomeChecklist } from "./welcome.ts";
-import { libraryBooks } from "./ebooks.ts";
+import { lastReadPage, libraryBooks } from "./ebooks.ts";
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
@@ -322,16 +322,13 @@ export function registerPlanner(app:FastifyInstance,session:Session,academic:Aca
       for(const id of [...(l.type==="html_article" && l.resourceId?[l.resourceId]:[]),...(l.relatedResourceIds ?? [])])
         if(!allowed.has(id)) allowed.set(id,{url:`/api/v1/ebooks/${id}?courseId=${courseId}&lessonId=${l.id}`});
     }
-    const reading=(await tx.query(`SELECT p.book_id,p.page_id,r.manuscript->>'title' AS title FROM ebook_reading p
-      JOIN ebooks b ON b.id=p.book_id JOIN ebook_revisions r ON (b.id,b.published_revision)=(r.book_id,r.revision)
-      WHERE p.user_id=$1 AND p.book_id=ANY($2::uuid[]) AND EXISTS(SELECT FROM jsonb_array_elements(r.manuscript->'pages') page
-      WHERE page->>'id'=p.page_id::text) ORDER BY last_read_at DESC,p.page_id LIMIT 1`,[user,[...allowed.keys()]])).rows[0];
+    const reading=await lastReadPage(tx,user,[...allowed.keys()]);
     const rev=await revisionSummary(tx,user);
     const onboarding=await welcomeChecklist(tx,user);
     return {familyPresence:await familyStrip(tx,user),onboarding,planner:{...today,tasks:today.tasks.slice(0,5),events:today.events.slice(0,5),overdue:today.overdue.slice(0,5),
       overdueCount:today.overdue.length,nextTask:nextTask?taskView(nextTask,courses):null,url:base},upcomingEvents:upcoming.map(e=>({...e,url:base+"/events/"+e.id})),
       continueLesson:quickStarts[0]?{courseId:quickStarts[0].courseId,lessonId:quickStarts[0].lessonId,title:quickStarts[0].title,url:quickStarts[0].url}:null,
-      continueReading:reading?{bookId:reading.book_id,pageId:reading.page_id,title:reading.title,url:allowed.get(reading.book_id)!.url}:null,
+      continueReading:reading?{...reading,url:allowed.get(reading.bookId)!.url}:null,
       revision:{due:rev.dueCount,new:rev.newCount,url:"/api/v1/me/revision"}};
   }));
   app.get<{Querystring:{from?:string;to?:string;download?:boolean}}>("/api/v1/me/progress",{

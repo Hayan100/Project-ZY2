@@ -43,6 +43,14 @@ export async function libraryBooks(tx:PoolClient,user:string,query="",linkedBook
       ORDER BY exam,subject,title,b.id`,linkedBookIds ? [user,query,linkedBookIds] : [user,query])).rows;
 }
 
+export async function lastReadPage(tx:PoolClient,user:string,allowedIds?:string[]) {
+  return (await tx.query(`SELECT b.id AS "bookId",p.page_id AS "pageId",r.manuscript->>'title' AS title
+    ${published} JOIN ebook_reading p ON p.book_id=b.id WHERE p.user_id=$1
+    AND ${allowedIds ? "b.id=ANY($2::uuid[])" : entitled}
+    AND EXISTS(SELECT FROM jsonb_array_elements(r.manuscript->'pages') page WHERE page->>'id'=p.page_id::text)
+    ORDER BY p.last_read_at DESC,p.page_id,b.id LIMIT 1`,allowedIds ? [user,allowedIds] : [user])).rows[0];
+}
+
 export function registerEbooks(app:FastifyInstance, session:ReturnType<typeof sessionTransaction>, academic:Academic, accessible:string) {
   const staff = "/api/v1/staff/ebooks";
   const library = "/api/v1/ebooks";
@@ -102,6 +110,21 @@ export function registerEbooks(app:FastifyInstance, session:ReturnType<typeof se
   }
   app.get<{Querystring:{q?:string}}>(library,{schema:{querystring:object({q:{type:"string",maxLength:200}},[])}},
     req=>session(req,async (tx,actor)=>({ebooks:await libraryBooks(tx,actor.id,req.query.q ?? "")})));
+  app.get<{Querystring:{q?:string}}>(library+"/home",{schema:{querystring:object({q:{type:"string",maxLength:200}},[])}},
+    req=>session(req,async (tx,actor)=>{
+      const books=await libraryBooks(tx,actor.id,req.query.q?.trim());
+      const myBooks:{exam:string;subject:string;books:typeof books}[]=[];
+      for(const book of books) {
+        let shelf=myBooks.at(-1);
+        if(!shelf || shelf.exam!==book.exam || shelf.subject!==book.subject) {
+          shelf={exam:book.exam,subject:book.subject,books:[]};
+          myBooks.push(shelf);
+        }
+        shelf.books.push({...book,href:library+"/"+book.id});
+      }
+      const last=await lastReadPage(tx,actor.id);
+      return {continueReading:last?{...last,href:library+"/"+last.bookId}:null,myBooks};
+    }));
   app.get<Reader>(library+"/:id",{schema:{params,querystring:context}},req=>session(req,async (tx,actor)=>{
     const book=await bookFor(tx,actor.id,req.params.id,req.query);
     const saved=await tx.query("SELECT page_id,studied FROM ebook_reading WHERE user_id=$1 AND book_id=$2 ORDER BY last_read_at DESC,page_id",

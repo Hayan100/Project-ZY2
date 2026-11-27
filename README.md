@@ -124,6 +124,8 @@ Apply migrations and reapply `backend/curriculum-grants.sql` before starting the
 
 ## Ebook authoring and reading
 
+Open `GET /api/v1/ebooks/home` for Continue Reading and My Books. Each shelf groups library books by exam and subject. Each book links to the full reader and reports visited, marked-studied and total pages for its current edition. Optional `q` filters shelves by title, exam or subject. Continue Reading always links to the most recently visited page still present in an accessible library book, via the full reader and its resume page ID. Lesson-only books open through their authorized lesson workspace.
+
 Academic staff use `/api/v1/staff/ebooks`. POST a book UUID, an optional fixed `libraryProductKey`, and a `manuscript` to create revision 1. The manuscript contains a title, exam, subject, and ordered pages. Each page has a stable lowercase UUID, a title, and an ordered `blocks` array. Each block has a `type` of `heading` or `paragraph` and a plain-text `text` field. Clients render these as responsive headings and paragraphs using text nodes.
 
 GET the collection to list books. GET `/:id` to preview the latest manuscript, optionally supplying `?revision=N` for an earlier revision. PUT `/:id` with the current revision and complete manuscript to save an edit. POST `/:id/publish` with the reviewed revision to release it. Each published page requires at least one block. Keep existing page IDs when correcting or reordering pages.
