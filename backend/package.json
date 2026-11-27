@@ -12,7 +12,7 @@
     "migrate": "node-pg-migrate up --migrations-dir migrations",
     "check": "tsc --noEmit",
     "test": "node --test test/*.test.ts",
-    "receipts": "node src/receipt-worker.ts"
+    "receipts": "node --env-file-if-exists=.env src/receipt-worker.ts"
   },
   "dependencies": {
     "@fastify/helmet": "^13.2.0",
