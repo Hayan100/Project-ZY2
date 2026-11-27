@@ -45,3 +45,8 @@ GRANT DELETE ON family_entries TO zy2_api;
 GRANT UPDATE (family_id,joined_at) ON family_entries TO zy2_api;
 GRANT SELECT,INSERT,UPDATE (restricted,changed_by,changed_at) ON family_restrictions TO zy2_api;
 GRANT SELECT ON family_staff TO zy2_api;
+GRANT SELECT,INSERT ON live_papers,live_rooms,live_sides,live_players,live_messages TO zy2_api;
+GRANT UPDATE(started,deadline) ON live_rooms TO zy2_api;
+GRANT UPDATE(controller,answers,version,submitted) ON live_sides TO zy2_api;
+GRANT UPDATE(ready,seen,votes,board_question,board_phase,board_version,board_at) ON live_players TO zy2_api;
+GRANT SELECT ON live_scores,live_focus,live_duel_responses TO zy2_api;

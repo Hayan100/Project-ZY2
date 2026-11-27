@@ -22,7 +22,7 @@ async function manager(tx:PoolClient,family:string,user:string) {
   if(!(await tx.query(`SELECT FROM families f WHERE f.id=$1 AND (f.created_by=$2 OR EXISTS
     (SELECT FROM family_staff s WHERE s.family_id=f.id AND s.user_id=$2))`,[family,user])).rowCount) fail(403);
 }
-async function eventManager(tx:PoolClient,event:string,user:string) {
+export async function eventManager(tx:PoolClient,event:string,user:string) {
   const row=(await tx.query("SELECT home,away FROM family_events WHERE id=$1",[event])).rows[0] ?? fail(404);
   await manager(tx,row.home,user);
   await manager(tx,row.away,user);
@@ -30,13 +30,13 @@ async function eventManager(tx:PoolClient,event:string,user:string) {
 async function lock(tx:PoolClient,id:string) {
   await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1,19))",[id]);
 }
-const activeCaptain=`FROM family_captains c JOIN family_students s ON s.family_id=c.family_id AND s.user_id=c.student_id
+export const activeCaptain=`FROM family_captains c JOIN family_students s ON s.family_id=c.family_id AND s.user_id=c.student_id
   AND s.assigned_at<=c.volunteered_at WHERE c.family_id=$1 AND c.approved_at IS NOT NULL AND c.ends_at>now() AND c.stepped_down_at IS NULL`;
 async function roster(tx:PoolClient,family:string) {
   return (await tx.query(`SELECT m.user_id AS id,u.name,m.user_id=f.mentor_id AS ghazi,p.last_active AS "lastActive",
     coalesce(p.last_active>now()-interval '5 minutes',false) AS online,
-    CASE WHEN p.sharing AND NOT p.focused AND p.last_active>now()-interval '5 minutes' THEN p.activity END AS activity,
-    CASE WHEN p.sharing AND NOT p.focused AND p.last_active>now()-interval '5 minutes' THEN p.subject END AS subject
+    CASE WHEN p.sharing AND NOT p.focused AND NOT EXISTS(SELECT FROM live_focus WHERE player=m.user_id) AND p.last_active>now()-interval '5 minutes' THEN p.activity END AS activity,
+    CASE WHEN p.sharing AND NOT p.focused AND NOT EXISTS(SELECT FROM live_focus WHERE player=m.user_id) AND p.last_active>now()-interval '5 minutes' THEN p.subject END AS subject
     FROM family_members m JOIN families f ON f.id=m.family_id JOIN "user" u ON u.id=m.user_id
     LEFT JOIN family_presence p ON p.user_id=m.user_id WHERE m.family_id=$1 ORDER BY ghazi DESC,u.name,m.user_id`,[family])).rows;
 }
@@ -45,7 +45,7 @@ async function mine(tx:PoolClient,user:string) {
     WHERE m.user_id=$1 ORDER BY f.name,f.id`,[user])).rows;
 }
 async function focused(tx:PoolClient,user:string) {
-  return !!(await tx.query("SELECT FROM family_presence WHERE user_id=$1 AND focused",[user])).rowCount;
+  return !!(await tx.query("SELECT FROM family_presence WHERE user_id=$1 AND focused UNION ALL SELECT FROM live_focus WHERE player=$1",[user])).rowCount;
 }
 export async function familyStrip(tx:PoolClient,user:string) {
   if(await focused(tx,user)) return [];
@@ -64,10 +64,11 @@ async function weekly(tx:PoolClient,family:string) {
 async function hall(tx:PoolClient,family:string) {
   const awards=(await tx.query(`SELECT id,student_id AS "memberId",title,kind,awarded_at AS "awardedAt" FROM family_awards
     WHERE family_id=$1 ORDER BY awarded_at DESC,id`,[family])).rows;
-  const leaderboard=(await tx.query(`WITH scores AS (
+  const leaderboard=(await tx.query(`WITH event_points AS (SELECT e.home,e.away,e.home_points,e.away_points FROM family_events e WHERE e.ranked_by IS NOT NULL AND e.recorded_by IS NOT NULL
+    UNION ALL SELECT e.home,e.away,h.score,a.score FROM family_events e JOIN live_rooms r ON r.event=e.id JOIN live_scores h ON h.room=r.id AND h.side=1 JOIN live_scores a ON a.room=r.id AND a.side=2 WHERE e.ranked_by IS NOT NULL),scores AS (
     SELECT f.id,f.name,sum(CASE WHEN e.home=f.id THEN e.home_points ELSE e.away_points END)::int AS points
-    FROM families other JOIN families f ON ${sameCohort} JOIN family_events e ON f.id IN(e.home,e.away)
-    WHERE other.id=$1 AND e.ranked_by IS NOT NULL AND e.recorded_by IS NOT NULL GROUP BY f.id)
+    FROM families other JOIN families f ON ${sameCohort} JOIN event_points e ON f.id IN(e.home,e.away)
+    WHERE other.id=$1 GROUP BY f.id)
     SELECT id,name,points,dense_rank() OVER(ORDER BY points DESC)::int AS rank FROM scores ORDER BY rank,name,id`,[family])).rows;
   return {week:await weekly(tx,family),awards,leaderboard};
 }
@@ -226,8 +227,8 @@ export function registerFamilies(app:FastifyInstance,session:ReturnType<typeof s
     const f=await member(tx,req.params.id,a.id);
     const opponents=(await tx.query(`SELECT f.id,f.name FROM families f JOIN families other ON ${sameCohort} WHERE other.id=$1 AND f.id<>$1 ORDER BY f.name,f.id`,[f.id])).rows;
     return {opponents,challenges:(await tx.query(`SELECT e.id,e.home,e.away,e.title,e.opens_at,e.closes_at,e.ranked_by IS NOT NULL AS ranked,
-      e.home_points,e.away_points,EXISTS(SELECT FROM family_entries p WHERE p.event_id=e.id AND p.user_id=$2 AND p.family_id=$1) AS joined
-      FROM family_events e WHERE $1 IN(e.home,e.away) ORDER BY e.opens_at DESC,e.id`,[f.id,a.id])).rows};
+      coalesce(e.home_points,h.score) AS home_points,coalesce(e.away_points,a.score) AS away_points,EXISTS(SELECT FROM family_entries p WHERE p.event_id=e.id AND p.user_id=$2 AND p.family_id=$1) AS joined
+      FROM family_events e LEFT JOIN live_rooms r ON r.event=e.id LEFT JOIN live_scores h ON h.room=r.id AND h.side=1 LEFT JOIN live_scores a ON a.room=r.id AND a.side=2 WHERE $1 IN(e.home,e.away) ORDER BY e.opens_at DESC,e.id`,[f.id,a.id])).rows};
   }));
   const eventParams=object({id:uuid,eventId:uuid});
   type EventPath={Params:{id:string;eventId:string}};
@@ -258,6 +259,7 @@ export function registerFamilies(app:FastifyInstance,session:ReturnType<typeof s
     const id=req.params.id,b=req.body;
     await lock(tx,id);
     const row=(await tx.query("SELECT * FROM family_events WHERE id=$1",[id])).rows[0] ?? fail(404);
+    if((await tx.query("SELECT FROM live_rooms WHERE event=$1",[id])).rowCount) fail(409);
     if(row.recorded_by) {
       if(row.home_points!==b.homePoints || row.away_points!==b.awayPoints) fail(409);
     } else {

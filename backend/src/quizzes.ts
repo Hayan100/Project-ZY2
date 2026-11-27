@@ -4,7 +4,7 @@ import { fail, type Academic, type sessionTransaction } from "./authorized.ts";
 import { loadCourse } from "./learning.ts";
 
 type Question = { id:string; stem:string; options:{id:string; text:string}[]; correctOptionId:string; explanation:string };
-type Quiz = { title:string; questions:Question[] };
+export type Quiz = { title:string; questions:Question[] };
 type Source = { courseId:string; lessonId:string; quizId:string };
 type AttemptPath = Source & { attemptId:string };
 type Attempt = { id:string; revision:number; quiz:Quiz; submitted_at:Date|null };
@@ -16,19 +16,23 @@ const object = (properties:Record<string,object>,required=Object.keys(properties
   ({type:"object",properties,required,additionalProperties:false});
 const question = object({id:uuid,stem:textField(8000),options:{type:"array",minItems:2,maxItems:10,
   items:object({id:uuid,text:textField(2000)})},correctOptionId:uuid,explanation:textField(8000)});
-const quizSchema = object({title:textField(200),questions:{type:"array",maxItems:200,items:question}});
+export const quizSchema = object({title:textField(200),questions:{type:"array",maxItems:200,items:question}});
 const quizParams = object({id:uuid});
 const sourceParams = {courseId:uuid,lessonId:uuid,quizId:uuid};
 const attemptParams = {...sourceParams,attemptId:uuid};
 const published = "SELECT revision,quiz FROM quiz_revisions WHERE quiz_id=$1 AND published_at IS NOT NULL ORDER BY revision DESC LIMIT 1";
 
-async function save(tx:PoolClient, id:string, revision:number, quiz:Quiz, author:string) {
+export function validateQuiz(quiz:Quiz) {
   const ids=new Set(quiz.questions.map(q=>q.id));
   if (ids.size!==quiz.questions.length) fail(400);
   for (const q of quiz.questions) {
     const options=new Set(q.options.map(o=>o.id));
     if (options.size!==q.options.length || !options.has(q.correctOptionId)) fail(400);
   }
+}
+
+async function save(tx:PoolClient, id:string, revision:number, quiz:Quiz, author:string) {
+  validateQuiz(quiz);
   await tx.query("INSERT INTO quiz_revisions(quiz_id,revision,quiz,authored_by) VALUES ($1,$2,$3,$4)",[id,revision,quiz,author]);
   return {id,revision};
 }

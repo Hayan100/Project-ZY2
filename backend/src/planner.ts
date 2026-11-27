@@ -331,9 +331,11 @@ export function registerPlanner(app:FastifyInstance,session:Session,academic:Aca
       const results=(await tx.query(`SELECT id,quiz_id AS "quizId",revision,submitted_at AS "submittedAt",correct,incorrect,omitted,total
         FROM lesson_quiz_results WHERE student_id=$1 AND submitted_at>=coalesce($2,'-infinity'::timestamptz)
         AND submitted_at<coalesce($3,'infinity'::timestamptz) ORDER BY submitted_at,id`,args)).rows;
-      const usage=(await tx.query(`SELECT count(DISTINCT question_id)::int AS "uniqueAnswered",count(*) FILTER(WHERE correct)::int AS correct,
-        count(*) FILTER(WHERE NOT correct)::int AS incorrect,count(*) FILTER(WHERE option_id IS NULL)::int AS omitted FROM quiz_responses r
-        JOIN quiz_attempts a ON a.id=r.attempt_id WHERE student_id=$1 AND recorded_at>=coalesce($2,'-infinity'::timestamptz)
+      const usage=(await tx.query(`SELECT count(DISTINCT question_id) FILTER(WHERE option_id IS NOT NULL)::int AS "uniqueAnswered",count(*) FILTER(WHERE correct)::int AS correct,
+        count(*) FILTER(WHERE NOT correct)::int AS incorrect,count(*) FILTER(WHERE option_id IS NULL)::int AS omitted FROM (
+          SELECT student_id,question_id,option_id,correct,recorded_at FROM quiz_responses r JOIN quiz_attempts a ON a.id=r.attempt_id
+          UNION ALL SELECT student_id,question_id,option_id,correct,recorded_at FROM live_duel_responses
+        ) responses WHERE student_id=$1 AND recorded_at>=coalesce($2,'-infinity'::timestamptz)
         AND recorded_at<coalesce($3,'infinity'::timestamptz)`,args)).rows[0];
       const revision=(await tx.query(`SELECT to_char(reviewed_at AT TIME ZONE 'Asia/Karachi','YYYY-MM-DD') AS day,rating,count(*)::int AS reviews
         FROM card_reviews WHERE student_id=$1 AND reviewed_at>=coalesce($2,'-infinity'::timestamptz) AND reviewed_at<coalesce($3,'infinity'::timestamptz)
@@ -351,7 +353,7 @@ export function registerPlanner(app:FastifyInstance,session:Session,academic:Aca
           ORDER BY quiz_id,revision DESC
         ), eligible AS (SELECT DISTINCT (q->>'id')::uuid AS id FROM current_quizzes CROSS JOIN LATERAL jsonb_array_elements(quiz->'questions') q),
         used AS (SELECT DISTINCT question_id FROM quiz_responses r JOIN quiz_attempts a ON a.id=r.attempt_id
-          WHERE a.student_id=$1 AND r.option_id IS NOT NULL)
+          WHERE a.student_id=$1 AND r.option_id IS NOT NULL UNION SELECT question_id FROM live_duel_responses WHERE student_id=$1 AND option_id IS NOT NULL)
         SELECT count(*)::int AS eligible,count(u.question_id)::int AS used FROM eligible e LEFT JOIN used u ON u.question_id=e.id`,
         [actor.id,[...quizIds]])).rows[0];
       const activity=(await tx.query(`SELECT count(*)::int AS "visitedPages",count(*) FILTER(WHERE studied)::int AS "studiedPages"
