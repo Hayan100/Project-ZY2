@@ -41,14 +41,18 @@ export async function loadCourse(tx: PoolClient, accessible: string, user: strin
     `SELECT r.revision,r.outline,now() AS now ${accessible} AND c.id=$2 ${write ? "FOR SHARE OF c" : ""}`, [user,course])).rows[0];
   if (!row) return fail(404);
   const saved = await tx.query<Saved>("SELECT * FROM lesson_progress WHERE user_id=$1 AND course_id=$2", [user,course]);
-  const lessons = row.outline.chapters.flatMap(ch => ch.lessons);
+  return { ...row, ...courseLessons(row.outline,row.now,saved.rows) };
+}
+
+export function courseLessons<S extends Pick<Saved,"lesson_id"|"resource_id"|"lesson_type"|"completed">>(outline: Outline, now: Date, saved: S[]) {
+  const lessons = outline.chapters.flatMap(ch => ch.lessons);
   const current = new Map(lessons.map(l => [l.id,l]));
-  const progress = new Map(saved.rows.filter(p => {
+  const progress = new Map(saved.filter(p => {
     const l = current.get(p.lesson_id);
     return l?.resourceId === p.resource_id && l.type === p.lesson_type;
   }).map(p => [p.lesson_id,p]));
   function lockReason(l: Lesson) {
-    if (l.releaseAt && Date.parse(l.releaseAt) > row.now.getTime()) return "scheduled";
+    if (l.releaseAt && Date.parse(l.releaseAt) > now.getTime()) return "scheduled";
     if (l.prerequisiteIds?.some(id => !progress.get(id)?.completed)) return "prerequisite";
     return null;
   }
@@ -58,7 +62,7 @@ export async function loadCourse(tx: PoolClient, accessible: string, user: strin
     if (lockReason(lesson)) return fail(403);
     return lesson;
   }
-  return { ...row, lessons, progress, lockReason, available };
+  return { lessons, progress, lockReason, available };
 }
 
 export function registerLearning(app: FastifyInstance, session: ReturnType<typeof sessionTransaction>, accessible: string) {

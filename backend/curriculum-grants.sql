@@ -11,3 +11,10 @@ GRANT INSERT (quiz_id,revision,quiz,authored_by), UPDATE (published_by,published
 GRANT INSERT (id,student_id,quiz_id,revision,course_id,lesson_id), UPDATE (submitted_at) ON quiz_attempts TO zy2_api;
 GRANT INSERT (attempt_id,question_id,option_id,correct) ON quiz_responses TO zy2_api;
 GRANT SELECT ON lesson_quiz_results TO zy2_api;
+GRANT SELECT ON deck_revisions,published_decks,revision_mentors,deck_activations,revision_budgets,card_reviews TO zy2_api;
+GRANT INSERT (deck_id,revision,deck,authored_by), UPDATE (published_by,published_at,reset_cards) ON deck_revisions TO zy2_api;
+GRANT INSERT (student_id,deck_id,revision,activated_by) ON deck_activations TO zy2_api;
+GRANT INSERT (student_id,minutes), UPDATE (minutes) ON revision_budgets TO zy2_api;
+GRANT INSERT ON card_reviews TO zy2_api;
+GRANT SELECT,INSERT,UPDATE (revision,front,back,reset_revision) ON academy_cards TO zy2_api;
+GRANT UPDATE (suggested_minutes) ON revision_mentors TO zy2_api;

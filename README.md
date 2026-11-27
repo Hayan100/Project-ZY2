@@ -156,3 +156,25 @@ Link the published quiz UUID as an MCQ lesson's primary resource or in a lesson'
 Option selection stays local until the student commits. A correct answer earns one point, and incorrect or omitted answers earn zero. A later publication applies to new attempts. A repeat answer updates current correctness and clears omission status while preserving history. Quiz actions preserve the parent lesson's saved video timestamp, reading position and completion state. Reopen the original lesson when leaving practice.
 
 `GET /api/v1/me/quiz-results` returns the student's historical result summaries, including after enrollment expiry. Reading question text or explanations still requires an eligible lesson. Apply migrations and reapply `backend/curriculum-grants.sql` for the new runtime permissions.
+
+## Lesson-linked flashcards and spaced review
+
+Academic staff use `/api/v1/staff/decks`. GET lists decks. GET `/:id` previews the latest draft or a specific `?revision=N`. PUT `/:id` with `{revision,deck:{title,cards}}` to save a draft. Supply revision 0 to create the deck and the current draft revision thereafter. An owned card contains a lowercase UUID, `front` and `back`. Reference an already published academy card in another deck using just its `id`. Its original deck owns the wording.
+
+POST `/:id/publish` with the reviewed revision. The first publication needs at least one card. Publication updates shared wording everywhere and retains each student's schedule. To require relearning, explicitly include the affected owned card IDs in `resetCardIds` when publishing a new revision. The card becomes due immediately for students who previously reviewed it. The publication records the actor and affected cards. All prior ratings remain in history.
+
+Link a published deck as the primary resource of a Flashcard Review lesson or as a related resource. Use `/api/v1/courses/:courseId/lessons/:lessonId/decks/:deckId` to retrieve the recommendation. PUT `/activation` at that path to activate it and GET `/review` for its eligible cards. An assigned mentor can POST `/assign` with `studentId`; the API checks the mentor relationship and the student's current lesson access. Provision authorized pairs in `revision_mentors(student_id,mentor_id)` as database owner. Completing a lesson alone leaves the deck recommended. Review preserves the parent lesson's saved position.
+
+| Student workflow | Route and behavior |
+| --- | --- |
+| Set daily budget | PUT `/api/v1/me/revision/budget` with `minutes`. New cards become available once the student chooses a budget. An assigned mentor can suggest an adjustment via PUT `/api/v1/mentor/students/:studentId/revision-budget` with `minutes`. |
+| Open Revision or My Camp | GET `/api/v1/me/revision` for recommendations, activated decks, due cards, eligible new cards, estimated time spent, and future scheduled counts by local date. Shared cards appear once. Every read checks current lesson access. |
+| Reveal a card | GET `/api/v1/me/revision/decks/:deckId/cards/:cardId` for an eligible card's front, back, deck revision, card revision and student schedule version. |
+| Record recall | PUT `/review` on that card with `eventId` (client UUID), `revision`, `cardRevision`, `version` and `rating` (Again, Hard, Good or Easy). Reuse the identical event on retry. A 409 requires refreshing the queue and reconciling the pending review. |
+| Review activity | GET `/api/v1/me/revision/history` returns the student's latest 100 accepted ratings and due dates. History remains available after enrollment expiry without card text. |
+
+The server schedules each accepted rating using pinned `ts-fsrs@5.4.2`, 90% target retention, default short-term steps, and interval fuzz disabled. A review uses the server acceptance time. There is one schedule per student and canonical card across lesson links and activated decks.
+
+Initial workload estimates allocate 60 seconds to introducing a new card and 30 seconds to reviewing a seen card. The queue deducts today's estimated time and reserves time for every due card before admitting new cards. Due cards remain available over budget and must be cleared before grading a new card. Daily accounting and the forecast use Asia/Karachi. Forecast counts reflect existing scheduled reviews and change as students rate cards. The estimates and retention setting are initial values for pilot validation.
+
+Install locked backend dependencies, apply migrations and reapply `backend/curriculum-grants.sql` before running the updated API.

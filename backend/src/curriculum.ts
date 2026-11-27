@@ -1,3 +1,4 @@
+import { registerFlashcards } from "./flashcards.ts";
 import { registerQuizzes } from "./quizzes.ts";
 import { registerEbooks } from "./ebooks.ts";
 import { registerLearning, validatePrerequisites } from "./learning.ts";
@@ -96,4 +97,5 @@ export function registerCurriculum(app: FastifyInstance, db: Pool, principal: Id
   registerLearning(app, session, accessible);
   registerEbooks(app, session, academic, accessible);
   registerQuizzes(app, session, academic, accessible);
+  registerFlashcards(app, session, academic, accessible);
 }
