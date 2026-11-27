@@ -74,3 +74,4 @@ GRANT SELECT,INSERT ON academy_sheets,inventory_saves TO zy2_api;
 GRANT DELETE ON inventory_saves TO zy2_api;
 GRANT SELECT,INSERT ON stoat_sends,study_bookmarks TO zy2_api;
 GRANT UPDATE(course,lesson,original_signature),DELETE ON study_bookmarks TO zy2_api;
+GRANT SELECT, INSERT, UPDATE ON personal_notes TO zy2_api;

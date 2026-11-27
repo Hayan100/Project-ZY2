@@ -83,6 +83,7 @@ test("lesson quizzes pin revisions, lock tutor answers, preserve omissions and e
   assert.deepEqual(during.quizzes,[{id:quizId,title:quiz.title,activeAttemptId:picked,href:"/api/v1/"+path}]);
   assert.equal(during.books[0].href,"/api/v1/ebooks/"+book+context);
   const before=(await read(attempt)).json();
+  assert.deepEqual((await read("me/quiz-results?download=true")).json().results,[]);
   for (const q of before.questions) assert.deepEqual(Object.keys(q).sort(),["id","options","stem"]);
   assert.equal((await answer(attempt,question.id,randomUUID())).statusCode,400);
   const changed={...quiz,questions:[{...question,correctOptionId:b,explanation:"Corrected key."},other]};
@@ -119,5 +120,20 @@ test("lesson quizzes pin revisions, lock tutor answers, preserve omissions and e
   assert.equal((await read(path+"/coverage")).statusCode,404);
   const results=(await read("me/quiz-results")).json().results;
   assert.equal(results.length,2);
+  const index=(await read("me/exports")).json();
+  for(const href of Object.values(index) as string[]) {
+    const download=await read(href.slice("/api/v1/".length));
+    assert.equal(download.statusCode,200,download.body);
+    assert.match(String(download.headers["content-disposition"]),/^attachment/);
+  }
+  assert.deepEqual((await read("me/quiz-results?download=true")).json().results,results);
+  const noteId=randomUUID(),notePath="me/notes/"+noteId;
+  const note={title:"Revision notes",body:"Review chapter two",version:0};
+  for(let retry=0;retry<2;retry++) assert.equal((await request("PUT",notePath,student,note)).json().version,1);
+  assert.equal((await request("PUT",notePath,student,{...note,body:"A conflicting edit"})).statusCode,409);
+  assert.equal((await request("PUT",notePath,student,{...note,body:"Updated",version:1})).json().version,2);
+  assert.deepEqual((await read("me/exports/notes")).json().notes,[{id:noteId,title:note.title,body:"Updated",version:2}]);
+  assert.deepEqual((await request("GET","me/exports/notes",staff)).json().notes,[]);
+  assert.equal((await request("GET","me/exports","")).statusCode,401);
   assert.deepEqual(Object.keys(results[0]).sort(),["correct","id","incorrect","omitted","quizId","revision","submittedAt","total"].sort());
 });

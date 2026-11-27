@@ -166,7 +166,10 @@ export function registerQuizzes(app:FastifyInstance, session:ReturnType<typeof s
     }
     return (await tx.query("SELECT * FROM lesson_quiz_results WHERE id=$1",[attempt.id])).rows[0];
   }));
-  app.get("/api/v1/me/quiz-results",req=>session(req,async(tx,actor)=>({results:(await tx.query(
+  app.get<{Querystring:{download?:boolean}}>("/api/v1/me/quiz-results",{schema:{querystring:object({download:{type:"boolean"}},[])}},(req,reply)=>session(req,async(tx,actor)=>{
+    if(req.query.download) reply.header("Content-Disposition",'attachment; filename="Project-ZY2-quiz-results.json"');
+    return {results:(await tx.query(
     'SELECT id,quiz_id AS "quizId",revision,submitted_at AS "submittedAt",correct,incorrect,omitted,total FROM lesson_quiz_results WHERE student_id=$1 ORDER BY submitted_at DESC,id',
-    [actor.id])).rows})));
+    [actor.id])).rows};
+  }));
 }

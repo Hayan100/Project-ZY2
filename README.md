@@ -370,6 +370,12 @@ Apply migration 19 and the curriculum grants. GET `/api/v1/me/saved` returns the
 
 PUT `/api/v1/me/saved` with `saved`, `kind`, `source` and `target`. For a lesson, supply the course and lesson IDs. For a page, supply the book and page IDs, plus the optional `course` and `lesson` reader context. For an academy sheet, supply the course and sheet IDs and the linking `lesson`. Community items reuse Inventory’s existing save and remove endpoint.
 
+### Student exports
+
+Apply migration 20 and reapply the curriculum grants. GET `/api/v1/me/exports` for the signed-in student’s four JSON downloads. The planner contains all personal and assigned tasks and accessible calendar events. The performance report uses the existing Progress endpoint and accepts its optional date filters. Result cards contain the student’s submitted lesson quiz scores, omissions and totals.
+
+Save a personal plain-text note with PUT `/api/v1/me/notes/:id`, using a client UUID and `title`, `body`, and `version` (0 to create). Edits use the last returned version. On a conflicting edit, fetch the notes download to reconcile. The export includes the student’s own text and version. It performs no lookup or expansion of linked source content or embedded media.
+
 ### Backend integration checks
 
 GitHub Actions provisions PostgreSQL on pushes and pull requests. To run the same setup locally, point `DATABASE_URL` and `TEST_DATABASE_URL` at a fresh disposable database owned by the test connection. From `backend`, run `npm ci`, `npm run check`, `npm run migrate`, `psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f test/bootstrap.sql`, then `npm test`. In PowerShell use `$env:DATABASE_URL` for the psql argument.

@@ -12,6 +12,7 @@ import { registerEbooks } from "./ebooks.ts";
 import { registerLearning } from "./learning.ts";
 import { registerCourses } from "./curriculum.ts";
 import { registerSaved } from "./saved.ts";
+import { registerExports } from "./exports.ts";
 import { registerLibrary } from "./virtual-library.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool, PoolClient } from "pg";
@@ -40,6 +41,7 @@ export function registerRoutes(app: FastifyInstance, db: Pool, principal: Identi
   const visibleChannels = registerCommunity(app, session, accessible);
   const savedCommunity = registerInventory(app, session, academic, accessible, visibleChannels);
   registerSaved(app, session, accessible, bookFor, savedCommunity);
+  registerExports(app, session);
   registerSupport(app, session);
   registerFeatureBoard(app, session);
   registerPlanner(app, session, academic, accessible, revisionSummary);

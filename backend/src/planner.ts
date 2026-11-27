@@ -287,6 +287,12 @@ export function registerPlanner(app:FastifyInstance,session:Session,academic:Aca
     }));
   }
   const views={enum:["today","week","month","progress"]};
+  app.get("/api/v1/me/exports/planner",(req,reply)=>session(req,async(tx,actor)=>{
+    const {tasks,events}=await schedule(tx,actor.id);
+    const courses=await curriculum(tx,actor.id,accessible);
+    reply.header("Content-Disposition",'attachment; filename="Project-ZY2-planner.json"');
+    return {timeZone:zone,tasks:tasks.map(t=>taskView(t,courses)),events};
+  }));
   type Period={date?:string;view?:"today"|"week"|"month"|"progress";download?:boolean};
   app.get<{Querystring:Period}>(base,{schema:{querystring:object({date:day,view:views,download:{type:"boolean"}},[])}},(req,reply)=>
     session(req,async(tx,actor)=>{
