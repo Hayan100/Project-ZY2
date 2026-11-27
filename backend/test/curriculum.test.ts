@@ -177,14 +177,25 @@ test("academic revisions publish atomically and follow current enrollment", { sk
   assert.equal((await request("GET",classPath+"/attendance",student)).json().corrected,20);
   await owner.query("UPDATE classes SET closes=now() WHERE id=$1",[classId]);
   const assetId=randomUUID();
+  const replayPicker=staff+"/resources?kind=replay&q=Lecture";
+  assert.equal((await request("GET",replayPicker,student)).statusCode,403);
   assert.equal((await request("PUT",classStaff+"/"+classId+"/replay",author,{assetId})).statusCode,200);
   assert.equal((await request("POST",classPath+"/replay",student)).json().assetId,assetId);
+  const recording=(await request("GET",replayPicker,author)).json().resources.find((r:{id:string})=>r.id===assetId);
+  assert.deepEqual(recording,{kind:"replay",id:assetId,title:"Lecture"});
+  const replayCourse=randomUUID(),replayLesson=randomUUID();
+  const draft={id:replayCourse,productKey:product,outline:{title:"Recorded lectures",chapters:[{id:randomUUID(),title:"Recordings",
+    lessons:[{id:replayLesson,title:recording.title,type:"video",resourceId:recording.id}]}]}};
+  assert.equal((await request("POST",staff,author,draft)).statusCode,201);
+  const playback=mine+"/"+replayCourse+"/lessons/"+replayLesson+"/watch";
+  assert.equal((await request("GET",playback,student)).statusCode,404);
+  assert.equal((await request("POST",staff+"/"+replayCourse+"/publish",author,{revision:1})).statusCode,200);
   const priorMedia=process.env.VIDEO_PLAYBACK_URL;
   const media=createServer((_req,res)=>{res.setHeader("Content-Type","application/json");res.end(JSON.stringify({url:"https://assets.example.test/lesson.mp4"}))});
   await new Promise<void>(resolve=>media.listen(0,"127.0.0.1",resolve));
   process.env.VIDEO_PLAYBACK_URL="http://127.0.0.1:"+(media.address() as {port:number}).port;
   t.after(()=>{media.close();if(priorMedia===undefined)delete process.env.VIDEO_PLAYBACK_URL;else process.env.VIDEO_PLAYBACK_URL=priorMedia});
-  for(const url of [classPath+"/replay/watch",path(lesson.id)+"/watch"]){
+  for(const url of [classPath+"/replay/watch",path(lesson.id)+"/watch",playback]){
     const page=await request("GET",url,student);
     assert.equal(page.statusCode,200);
     assert.ok(page.body.includes("lesson.mp4") && page.body.includes("+923001234567") && page.body.includes("180000"));

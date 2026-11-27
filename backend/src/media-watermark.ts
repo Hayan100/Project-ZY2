@@ -16,7 +16,7 @@ export function pdfStamp(viewer:Viewer){
   const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%"><defs><pattern id="tile" width="${width}" height="120" patternUnits="userSpaceOnUse" patternTransform="rotate(-28)"><text x="8" y="60" font-family="sans-serif" font-size="14" fill="#465265" fill-opacity=".16" textLength="${width-64}" lengthAdjust="spacingAndGlyphs">${escape(label)}</text></pattern></defs><rect width="100%" height="100%" fill="url(#tile)"/></svg>`;
   return {label,svg};
 }
-export const markCss=`#mark{position:absolute;z-index:1;pointer-events:none;user-select:none;white-space:pre-line;overflow-wrap:anywhere;max-width:85%;max-height:88%;overflow:hidden;color:white;background:rgb(20 24 28 / 56%);border-radius:3px;padding:.25em .65em;font:500 clamp(10px,1.7vw,20px)/1.23 system-ui}#mark[hidden]{display:none}`;
+export const markCss=`#mark{position:absolute;z-index:1;pointer-events:none;user-select:none;white-space:pre-line;overflow-wrap:anywhere;width:max-content;max-width:85%;max-height:88%;overflow:hidden;color:white;background:rgb(20 24 28 / 56%);border-radius:3px;padding:.25em .65em;font:500 clamp(10px,1.7vw,20px)/1.23 system-ui}#mark[hidden]{display:none}`;
 export function markHtml(v:Viewer){return `<div id="mark" hidden aria-hidden="true">${[v.name,v.phone??"",v.email].map(escape).join("\n")}</div>`}
 // Timers accumulate playing time so pausing does not reset the interval.
 export const markScript=`

@@ -50,7 +50,7 @@ async function saveRevision(tx: PoolClient, id: string, version: number, outline
 export function registerCourses(app: FastifyInstance, session: ReturnType<typeof sessionTransaction>, academic: Academic, accessible: string) {
   const staff = "/api/v1/staff/courses";
   app.get<{ Querystring: { kind?:string; q?:string; offset?:number } }>(staff+"/resources", {
-    schema:{querystring:object({kind:{enum:["ebook","quiz","deck","sheet"]},q:{type:"string",maxLength:200},
+    schema:{querystring:object({kind:{enum:["ebook","quiz","deck","sheet","replay"]},q:{type:"string",maxLength:200},
       offset:{type:"integer",minimum:0,maximum:2147483647}},[])}
   }, req => academic(req, async tx => {
     const {kind,q="",offset=0} = req.query;
@@ -62,6 +62,9 @@ export function registerCourses(app: FastifyInstance, session: ReturnType<typeof
          WHERE published_at IS NOT NULL ORDER BY quiz_id,revision DESC) published_quizzes
       UNION ALL SELECT 'deck',deck_id,deck->>'title' FROM published_decks
       UNION ALL SELECT 'sheet',id,title FROM academy_sheets
+      UNION ALL SELECT 'replay',replay::uuid,title FROM
+        (SELECT DISTINCT ON (replay) replay,title FROM classes WHERE replay IS NOT NULL AND pg_input_is_valid(replay,'uuid') AND closes<=now()
+         ORDER BY replay,closes DESC,id) finished_classes
     ) SELECT kind,id,title FROM resources WHERE ($1::text IS NULL OR kind=$1)
         AND strpos(lower(title),lower($2))>0 ORDER BY lower(title),kind,id LIMIT 51 OFFSET $3`,[kind,q.trim(),offset]);
     return {resources:rows.slice(0,50),nextOffset:rows.length>50 ? offset+50 : null};
