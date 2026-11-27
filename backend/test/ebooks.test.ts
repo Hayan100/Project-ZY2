@@ -28,6 +28,7 @@ test("published ebooks share stable pages and reading state across authorized en
   const request=(method:"GET"|"POST"|"PUT",path:string,cookie:string,payload?:object)=>
     app.inject({method,url:"/api/v1/"+path,headers:{cookie},payload});
   const author="staff/ebooks", library="ebooks/"+book;
+  assert.equal((await request("PUT","me/watermark-phone",student,{phone:"+923001234567"})).statusCode,200);
   const context="?courseId="+course+"&lessonId="+lesson;
   const page={id:randomUUID(),title:"Cell walls",blocks:[{type:"paragraph",text:"Cellulose provides structure."}]};
   const manuscript={title:"Biology",exam:"MDCAT",subject:"Botany",pages:[page]};
@@ -52,6 +53,8 @@ test("published ebooks share stable pages and reading state across authorized en
   assert.equal((await get(library+"?courseId="+course)).statusCode,400);
   const pagePath=library+"/pages/"+page.id;
   assert.deepEqual((await get(pagePath+context)).json().page,page);
+  const html=await app.inject({url:"/api/v1/"+pagePath+context,headers:{cookie:student,accept:"text/html"}});
+  assert.ok(html.body.includes("rotate(-28)") && html.body.includes(student+" · +923001234567 · "+student+"@example.org"));
   const bookmark={kind:"page",source:book,target:page.id,course,lesson,saved:true};
   const annotation={id:randomUUID(),revision:1,version:0,start:0,end:9,body:"Review later"};
   const annotate=(b:typeof annotation)=>request("PUT",pagePath+"/annotations"+context,student,b);
@@ -127,8 +130,11 @@ test("published ebooks share stable pages and reading state across authorized en
   assert.equal((await request("PUT",author+"/"+pdfId,staff,{revision:1,manuscript:{...pdfManuscript,pdfAssetId:randomUUID()}})).statusCode,200);
   assert.equal((await request("POST",author+"/"+pdfId+"/publish",staff,{revision:2})).statusCode,200);
   assert.equal((await get("ebooks/"+pdfId+"/ink")).json().strokes[0].resolved,false);
-  const pdfService=createServer((_req,res)=>{res.setHeader("Content-Type","application/json");
-    res.end(JSON.stringify({url:"https://assets.example.test/page/1",expiresAt:new Date(Date.now()+30000).toISOString()}));});
+  const pdfService=createServer(async(req,res)=>{res.setHeader("Content-Type","application/json");
+    let body="";for await(const chunk of req)body+=chunk;
+    const job=JSON.parse(body);
+    assert.ok(job.watermark.svg.includes("rotate(-28)"));
+    res.end(JSON.stringify({url:"https://assets.example.test/page/1",appliedStampId:job.stampId,expiresAt:new Date(Date.now()+30000).toISOString()}));});
   await new Promise<void>(resolve=>pdfService.listen(0,"127.0.0.1",resolve));
   const oldPdf=process.env.PDF_PAGE_URL;
   t.after(()=>{pdfService.close();if(oldPdf===undefined) delete process.env.PDF_PAGE_URL;else process.env.PDF_PAGE_URL=oldPdf;});

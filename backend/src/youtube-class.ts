@@ -1,7 +1,6 @@
 import {randomBytes} from "node:crypto";
 
-type Viewer = {name:string; email:string; phone:string|null};
-const escape = (s:string) => s.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
+import {type Viewer,escape,markCss,markHtml,markScript} from "./media-watermark.ts";
 
 export function youtubeClassPage(title:string, viewer:Viewer, origin:string, videoId:string|null, sessionTag:string) {
   const nonce=randomBytes(18).toString("base64");
@@ -10,7 +9,7 @@ export function youtubeClassPage(title:string, viewer:Viewer, origin:string, vid
   <div class="screen"><iframe id="yt" tabindex="-1" title="Live class video" referrerpolicy="strict-origin-when-cross-origin"
     allow="autoplay; encrypted-media" src="https://www.youtube-nocookie.com/embed/${escape(videoId)}?enablejsapi=1&amp;origin=${encodeURIComponent(origin)}&amp;controls=0&amp;disablekb=1&amp;fs=0&amp;playsinline=1&amp;rel=0"></iframe>
     <div id="curtain">MDCATEMY</div>
-    <div id="mark" hidden aria-hidden="true">${[viewer.name,viewer.email,viewer.phone].map(v=>`<span>${escape(v)}</span>`).join("")}</div>
+    ${markHtml(viewer)}
   </div><div class="controls"><button id="play" disabled>Play</button><button id="sound" disabled>Mute</button>
     <button id="full">Full screen</button></div></section>
     <p>Your name, email and phone appear periodically on the video.</p>` :
@@ -25,9 +24,7 @@ main{max-width:70rem;margin:auto;padding:clamp(12px,3vw,40px)}h1{font-size:clamp
 button{cursor:pointer}a{color:inherit}#room{background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center}
 .screen{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden}iframe,#curtain{position:absolute;inset:0;width:100%;height:100%;border:0}
 iframe{pointer-events:none}#curtain{display:grid;place-items:center;background:#132327;font-weight:650}
-#mark{position:absolute;color:white;background:rgb(20 24 28 / 56%);border-radius:3px;padding:.25em .65em;max-width:88%;max-height:90%;overflow:hidden;
-font:500 clamp(10px,1.7vw,20px)/1.23 system-ui;overflow-wrap:anywhere;pointer-events:none;user-select:none}#mark span{display:block}
-#mark[data-pos="0"]{top:8%;left:5%}#mark[data-pos="1"]{bottom:12%;right:5%}#mark[data-pos="2"]{top:14%;right:7%}#mark[data-pos="3"]{bottom:9%;left:8%}
+${markCss}
 .controls{display:flex;gap:.4rem;width:100%;padding:.35rem}.controls button{color:white;background:#23383a;border:0;border-radius:4px}#full{margin-left:auto}
 #room:fullscreen,.expanded{width:100%;height:100%;background:black}.expanded{position:fixed;inset:0;z-index:1}
 #room:fullscreen .screen,.expanded .screen{width:min(100%,calc((100dvh - 4rem)*16/9))}
@@ -51,14 +48,9 @@ el("profile")?.addEventListener("submit",async e=>{
 const room=el("room");
 if(el("waiting"))setTimeout(()=>location.reload(),30000);
 if(room){
-  let player,playing=false,ended=false,position=0,showTimer,hideTimer;
-  const mark=el("mark"),cover=el("curtain"),full=el("full");
-  function clearMark(){clearTimeout(showTimer);clearTimeout(hideTimer);mark.hidden=true}
-  function showMark(){
-    mark.dataset.pos=String(position++%4);mark.hidden=false;
-    hideTimer=setTimeout(()=>{mark.hidden=true},6000);
-    showTimer=setTimeout(showMark,45000);
-  }
+  let player,playing=false,ended=false;
+  ${markScript}
+  const cover=el("curtain"),full=el("full");
   function end(message){
     ended=true;clearMark();player?.destroy();room.remove();statusLine.textContent=message;
   }
@@ -71,7 +63,7 @@ if(room){
         const wasPlaying=playing;
         playing=e.data===YT.PlayerState.PLAYING;
         cover.hidden=playing;el("play").textContent=playing?"Pause":"Play";
-        if(playing && !wasPlaying){clearMark();showMark()}else if(!playing){clearMark()}
+        if(playing && !wasPlaying){scheduleMark()}else if(!playing){clearMark()}
       },
       onError(){end("Video unavailable. Refresh to reconnect or contact your teacher.")}
     }});

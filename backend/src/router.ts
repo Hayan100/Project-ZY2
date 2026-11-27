@@ -24,12 +24,14 @@ import { registerSamples } from "./samples.ts";
 import { registerFeedback } from "./feedback.ts";
 import { registerContentAccess } from "./content-access.ts";
 import { registerLibrary } from "./virtual-library.ts";
+import { registerMediaIdentity } from "./media-watermark.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool, PoolClient } from "pg";
 import { fail, sessionTransaction, type Identity } from "./authorized.ts";
 
 export function registerRoutes(app: FastifyInstance, db: Pool, principal: Identity, origin: string) {
   const session = sessionTransaction(db, principal, origin);
+  registerMediaIdentity(app,session);
   function academic<T>(req: FastifyRequest, work: (tx: PoolClient, author: string) => Promise<T>) {
     return session(req, async (tx, actor) => {
       if (!(await tx.query("SELECT FROM academic_staff WHERE user_id=$1", [actor.id])).rowCount) fail(403);

@@ -3,6 +3,9 @@ import type { PoolClient } from "pg";
 import { fail, type Academic, type sessionTransaction } from "./authorized.ts";
 import { loadCourse } from "./learning.ts";
 import {ebookDelivery} from "./content-access.ts";
+import {pdfStamp,mediaViewer,escape,phoneForm,phoneSubmit} from "./media-watermark.ts";
+import {randomUUID} from "node:crypto";
+import {stampPage,readPage} from "./stamp-page.ts";
 
 type Page = { id: string; title: string; blocks: { type: "paragraph" | "heading"; text: string }[] };
 type Manuscript = { title: string; exam: string; subject: string; pdfAssetId?:string; pages: Page[] };
@@ -147,31 +150,39 @@ export function registerEbooks(app:FastifyInstance, session:ReturnType<typeof se
   }));
   const pagePath=library+"/:id/pages/:pageId";
   const pageSchema={params:object({id:uuid,pageId:uuid}),querystring:context};
-  app.post<PageRoute>(pagePath+"/pdf-access",{schema:pageSchema},async(req,reply)=>{
+  app.route<PageRoute>({method:["GET","POST"],url:pagePath+"/pdf-access",schema:pageSchema,handler:async(req,reply)=>{
     async function authorizedPage(record:boolean) {
       return session(req,async(tx,a)=>{
         const book=await bookFor(tx,a.id,req.params.id,req.query);
         const index=book.manuscript.pages.findIndex(p=>p.id===req.params.pageId);
         if(index<0 || !book.manuscript.pdfAssetId) return fail(404);
         if(record && !await ebookDelivery(tx,a.id,req.params.id,req.params.pageId,req.query.courseId)) return null;
-        return {assetId:book.manuscript.pdfAssetId,page:index+1,student:a.id,session:a.session,revision:book.revision};
+        const watermark=pdfStamp(await mediaViewer(tx,a.id));
+        return {assetId:book.manuscript.pdfAssetId,page:index+1,student:a.id,session:a.session,revision:book.revision,watermark};
       });
     }
     const source=await authorizedPage(false);
     if(!source) return fail(403);
     if(!process.env.PDF_PAGE_URL) return fail(503);
+    const stampId=randomUUID();
     const res=await fetch(process.env.PDF_PAGE_URL,{method:"POST",redirect:"error",signal:AbortSignal.timeout(8000),
       headers:{"Content-Type":"application/json",...(process.env.PDF_PAGE_TOKEN?{Authorization:"Bearer "+process.env.PDF_PAGE_TOKEN}:{})},
-      body:JSON.stringify({assetId:source.assetId,page:source.page,student:source.student,revision:source.revision})});
+      body:JSON.stringify({assetId:source.assetId,page:source.page,student:source.student,revision:source.revision,watermark:source.watermark,stampId})});
     if(!res.ok) return fail(503);
-    const ticket=await res.json() as {url?:string;expiresAt?:string};
+    const ticket=await res.json() as {url?:string;expiresAt?:string;appliedStampId?:string};
     if(!ticket.url || !URL.canParse(ticket.url) || new URL(ticket.url).protocol!=="https:" || !ticket.expiresAt ||
       !(Date.parse(ticket.expiresAt)>Date.now() && Date.parse(ticket.expiresAt)<=Date.now()+60000)) return fail(503);
+    const needsStamp=ticket.appliedStampId!==stampId;
+    const localPage=req.method==="GET" && needsStamp
+      ?await stampPage(await readPage(await fetch(ticket.url,{redirect:"error",signal:AbortSignal.timeout(8000)})),source.watermark.svg)
+      :null;
     const current=await authorizedPage(true);
     if(!current) return reply.code(429).send({error:"Reading access temporarily held for verification"});
-    if(source.session!==current.session || source.revision!==current.revision) return fail(409);
-    return {url:ticket.url,expiresAt:ticket.expiresAt};
-  });
+    if(source.session!==current.session || source.revision!==current.revision || source.watermark.label!==current.watermark.label) return fail(409);
+    if(localPage)return reply.type(localPage.type).send(localPage.bytes);
+    if(req.method==="GET")return reply.redirect(ticket.url);
+    return {url:needsStamp?req.url:ticket.url,expiresAt:ticket.expiresAt};
+  }});
   type Ink={id:string;revision:number;version:number;points:number[][]};
   const coordinate={type:"number",minimum:0,maximum:1};
   app.put<PageRoute & {Body:Ink}>(pagePath+"/ink",{schema:{...pageSchema,body:object({id:uuid,revision,
@@ -245,7 +256,28 @@ export function registerEbooks(app:FastifyInstance, session:ReturnType<typeof se
       reply.code(429);
       return {error:"Reading access temporarily held for verification"};
     }
-    return {revision:book.revision,page};
+    const viewer=await mediaViewer(tx,actor.id);
+    if(!viewer.phone){
+      if(req.headers.accept?.includes("text/html")){
+        const nonce=randomUUID();
+        return reply.header("Content-Security-Policy",`default-src 'none'; script-src 'nonce-${nonce}'; connect-src 'self'; form-action 'none'; frame-ancestors 'self'`)
+          .type("text/html; charset=utf-8").send(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reading access</title>${phoneForm}<output></output><script nonce="${nonce}">${phoneSubmit}</script>`);
+      }
+      return reply.code(422).send({error:"Mobile number required for the reading watermark",profileHref:"/api/v1/me/watermark-phone"});
+    }
+    const watermark=pdfStamp(viewer);
+    reply.header("Vary","Accept");
+    if(req.headers.accept?.includes("text/html")){
+      if(book.manuscript.pdfAssetId){
+        const url=req.url.split("?")[0]+"/pdf-access"+(req.url.includes("?")?"?"+req.url.split("?")[1]:"");
+        return reply.redirect(url);
+      }
+      const blocks=page.blocks.map(b=>b.type==="heading"?"<h2>"+escape(b.text)+"</h2>":"<p>"+escape(b.text)+"</p>").join("");
+      const nonce=randomUUID();
+      return reply.header("Content-Security-Policy",`default-src 'none'; style-src 'nonce-${nonce}'; frame-ancestors 'self'`)
+        .type("text/html; charset=utf-8").send(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(page.title)}</title><style nonce="${nonce}">body{margin:0;background:#eef1f5}article{box-sizing:border-box;position:relative;max-width:60rem;min-height:100vh;margin:auto;padding:clamp(1rem,5vw,4rem);background:white;color:#18283a;font:1.15rem/1.65 Georgia,serif;overflow-wrap:anywhere}article>svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;user-select:none}p{white-space:pre-wrap}</style><article><h1>${escape(page.title)}</h1>${blocks}${watermark.svg}</article></html>`);
+    }
+    return {revision:book.revision,page,watermark};
   }));
   app.put<PageRoute & {Body:{revision:number;studied?:boolean}}>(pagePath+"/reading",{
     schema:{...pageSchema,body:object({revision,studied:{type:"boolean"}},["revision"])}

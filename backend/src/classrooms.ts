@@ -1,6 +1,7 @@
 import type {FastifyInstance} from "fastify";
 import type {PoolClient} from "pg";
 import { youtubeClassPage } from "./youtube-class.ts";
+import {recordedPage,mediaViewer} from "./media-watermark.ts";
 import {createHmac} from "node:crypto";
 import {fail,type Academic,type sessionTransaction} from "./authorized.ts";
 const uuid={type:"string",format:"uuid"},instant={type:"string",format:"date-time"};
@@ -85,7 +86,7 @@ export function registerClassrooms(app:FastifyInstance,session:ReturnType<typeof
     const page=await session(req,async(tx,a)=>{
       const room=await active(tx,a.id,req.params.id);
       if(!room.youtube_video_id) fail(404);
-      const {rows:[viewer]}=await tx.query(`SELECT u.name,u.email,i.phone FROM "user" u LEFT JOIN classroom_identity i ON i.student=u.id WHERE u.id=$1`,[a.id]);
+      const viewer=await mediaViewer(tx,a.id);
       return youtubeClassPage(room.title,viewer,origin,room.youtube_state==="live"?room.youtube_video_id:null,viewingSession(a.session,req.params.id));
     });
     return reply.header("Content-Security-Policy",page.policy)
@@ -156,10 +157,17 @@ export function registerClassrooms(app:FastifyInstance,session:ReturnType<typeof
       SET expires=excluded.expires,reviewer=excluded.reviewer,reason=excluded.reason`,[req.params.id,req.body.student,req.body.expires,a,req.body.reason]);
     return {expires:req.body.expires};
   }));
+  async function replayAsset(tx:PoolClient,student:string,id:string):Promise<string>{
+    return ((await tx.query(`SELECT replay FROM classes c WHERE c.id=$2 AND now()>=c.closes AND replay IS NOT NULL
+      AND ((${eligible}) OR ${extended})`,[student,id])).rows[0]??fail(404)).replay;
+  }
+  app.get<Path>(base+"/:id/replay/watch",{schema:{params}},async(req,reply)=>{
+    const page=await recordedPage(req,session,(tx,user)=>replayAsset(tx,user,req.params.id));
+    return reply.header("Content-Security-Policy",page.policy).type("text/html; charset=utf-8").send(page.html);
+  });
   app.post<Path>(base+"/:id/replay",{schema:{params}},req=>session(req,async(tx,a)=>{
-    const row=(await tx.query(`SELECT replay AS "assetId" FROM classes c WHERE c.id=$2 AND now()>=c.closes AND replay IS NOT NULL
-      AND ((${eligible}) OR ${extended})`,[a.id,req.params.id])).rows[0]??fail(404);
+    const assetId=await replayAsset(tx,a.id,req.params.id);
     await tx.query("INSERT INTO class_replay_views(class,student) VALUES ($1,$2) ON CONFLICT DO NOTHING",[req.params.id,a.id]);
-    return row;
+    return {assetId,watchHref:base+"/"+req.params.id+"/replay/watch"};
   }));
 }

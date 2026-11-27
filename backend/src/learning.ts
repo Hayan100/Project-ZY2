@@ -100,6 +100,7 @@ export function registerLearning(app: FastifyInstance, session: ReturnType<typeo
     const lesson = course.available(lessonId);
     const saved = course.progress.get(lesson.id);
     return { revision:course.revision, lesson, version:saved?.version ?? 0, position:saved?.position ?? {}, completed:saved?.completed ?? false,
+      ...(lesson.type==="video" && lesson.resourceId?{watchHref:`/api/v1/courses/${id}/lessons/${lessonId}/watch`}:{}),
       ...(lesson.premiere?{premiereHref:`/api/v1/courses/${id}/lessons/${lessonId}/premiere`}:{}) };
   }
   app.get<Path>(lessonPath, { schema: { params } }, req =>

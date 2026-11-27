@@ -2,6 +2,7 @@ import type {FastifyInstance} from "fastify";
 import type {PoolClient} from "pg";
 import {fail,type Academic,type sessionTransaction} from "./authorized.ts";
 import {loadCourse} from "./learning.ts";
+import {recordedPage,videoPolicy,mediaViewer} from "./media-watermark.ts";
 
 const uuid={type:"string",format:"uuid"};
 const dateTime={type:"string",format:"date-time"};
@@ -44,6 +45,16 @@ export function registerPremieres(app:FastifyInstance,session:ReturnType<typeof 
       qualified,replay,canPlay,canDownload:policy.downloads && replay,requests};
   }
   app.get<{Params:Path}>(base,{schema:{params}},req=>session(req,(tx,a)=>status(tx,a.id,req.params)));
+  app.get<{Params:Path}>("/api/v1/courses/:course/lessons/:lesson/watch",{schema:{params}},async(req,reply)=>{
+    const page=await recordedPage(req,session,async(tx,student)=>{
+      const course=await loadCourse(tx,accessible,student,req.params.course,false,req.params.lesson);
+      const lesson=course.available(req.params.lesson);
+      if(lesson.type!=="video" || !lesson.resourceId) return fail(404);
+      if(lesson.premiere)await status(tx,student,req.params,true);
+      return lesson.resourceId;
+    });
+    return reply.header("Content-Security-Policy",page.policy).type("text/html; charset=utf-8").send(page.html);
+  });
   app.post<{Params:Path}>(base+"/start",{schema:{params}},req=>session(req,(tx,a)=>status(tx,a.id,req.params,true)));
   app.post<{Params:Path}>(base+"/download-authorization",{schema:{params}},req=>session(req,async(tx,a)=>{
     const state=await status(tx,a.id,req.params);
@@ -54,7 +65,9 @@ export function registerPremieres(app:FastifyInstance,session:ReturnType<typeof 
       AND e.starts_at<=now() AND e.ends_at>now() AND e.revoked_at IS NULL HAVING count(*)>0`,
       [req.params.course,a.id,state.qualified?null:new Date(Math.max(...state.requests.filter(r=>r.decision==="approved").map(r=>+r.expires_at)))]);
     if(!rows.length || +rows[0].expires<=Date.now()) fail(403);
-    return {course:req.params.course,lesson:req.params.lesson,expiresAt:rows[0].expires};
+    const identity=await mediaViewer(tx,a.id);
+    if(!identity.phone)fail(422);
+    return {course:req.params.course,lesson:req.params.lesson,expiresAt:rows[0].expires,watermark:{identity,...videoPolicy}};
   }));
   app.put<{Params:Path;Body:{id:string;reason:string}}>(base+"/requests",{schema:{params,body:object({id:uuid,reason:{type:"string",pattern:"\\S",maxLength:2000}})}},
     req=>session(req,async(tx,a)=>{

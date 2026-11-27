@@ -4,6 +4,7 @@ import {fail,type sessionTransaction} from "./authorized.ts";
 import type {FastifyRequest} from "fastify";
 import type {registerEbooks} from "./ebooks.ts";
 import {obj,uuid,label} from "./community.ts";
+import {mediaViewer,pdfStamp} from "./media-watermark.ts";
 type Policy={graceSeconds:number;shortSeconds:number;longSeconds:number;shortMax:number;longMax:number;holdSeconds:number};
 const positive={type:"integer",minimum:1,maximum:2592000};
 export async function ebookDelivery(tx:PoolClient,user:string,book:string,page:string,course?:string) {
@@ -58,6 +59,6 @@ export function registerContentAccess(app:FastifyInstance,session:ReturnType<typ
       JOIN enrollments e ON e.product_key=p.product AND e.user_id=$1 AND e.revoked_at IS NULL AND e.starts_at<=now() AND now()<e.ends_at
       WHERE b.id=$2 AND NOT EXISTS(SELECT FROM content_alerts x WHERE x.student=$1 AND x.product=p.product AND x.hold_until>now() AND x.reviewed_at IS NULL)
       GROUP BY p.grace_seconds`,[a.id,b.book,b.courseId])).rows[0]??fail(403);
-    return {book:b.book,revision:book.revision,session:a.session,expiresAt:row.expires};
+    return {book:b.book,revision:book.revision,session:a.session,expiresAt:row.expires,watermark:pdfStamp(await mediaViewer(tx,a.id))};
   }));
 }

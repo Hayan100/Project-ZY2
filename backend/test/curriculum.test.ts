@@ -179,6 +179,17 @@ test("academic revisions publish atomically and follow current enrollment", { sk
   const assetId=randomUUID();
   assert.equal((await request("PUT",classStaff+"/"+classId+"/replay",author,{assetId})).statusCode,200);
   assert.equal((await request("POST",classPath+"/replay",student)).json().assetId,assetId);
+  const priorMedia=process.env.VIDEO_PLAYBACK_URL;
+  const media=createServer((_req,res)=>{res.setHeader("Content-Type","application/json");res.end(JSON.stringify({url:"https://assets.example.test/lesson.mp4"}))});
+  await new Promise<void>(resolve=>media.listen(0,"127.0.0.1",resolve));
+  process.env.VIDEO_PLAYBACK_URL="http://127.0.0.1:"+(media.address() as {port:number}).port;
+  t.after(()=>{media.close();if(priorMedia===undefined)delete process.env.VIDEO_PLAYBACK_URL;else process.env.VIDEO_PLAYBACK_URL=priorMedia});
+  for(const url of [classPath+"/replay/watch",path(lesson.id)+"/watch"]){
+    const page=await request("GET",url,student);
+    assert.equal(page.statusCode,200);
+    assert.ok(page.body.includes("lesson.mp4") && page.body.includes("+923001234567") && page.body.includes("180000"));
+    assert.ok((await request("GET",url,author)).statusCode>=400);
+  }
   const when=(minutes:number)=>new Date(Date.now()+minutes*60000).toISOString();
   const closed={opens:when(-90),closes:when(-80),continueUntil:when(-75)};
   const slot={opens:when(-5),closes:when(10),continueUntil:when(30)};
