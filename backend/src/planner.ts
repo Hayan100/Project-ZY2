@@ -69,7 +69,7 @@ async function curriculum(tx:PoolClient,user:string,accessible:string) {
   return courses;
 }
 type Courses=Awaited<ReturnType<typeof curriculum>>;
-function summary(tasks:Task[]) {
+function summary(tasks:Pick<Task,"minutes"|"completed_at">[]) {
   return {total:tasks.length,completed:tasks.filter(t=>t.completed_at).length,plannedMinutes:tasks.reduce((n,t)=>n+t.minutes,0),
     completedMinutes:tasks.reduce((n,t)=>n+(t.completed_at?t.minutes:0),0)};
 }
@@ -286,14 +286,26 @@ export function registerPlanner(app:FastifyInstance,session:Session,academic:Aca
       return {accepted:true,token};
     }));
   }
-  const views={enum:["today","week","month"]};
-  type Period={date?:string;view?:"today"|"week"|"month";download?:boolean};
+  const views={enum:["today","week","month","progress"]};
+  type Period={date?:string;view?:"today"|"week"|"month"|"progress";download?:boolean};
   app.get<{Querystring:Period}>(base,{schema:{querystring:object({date:day,view:views,download:{type:"boolean"}},[])}},(req,reply)=>
     session(req,async(tx,actor)=>{
       const now=new Date(), date=req.query.date ?? localDate(now);
-      const plan=await schedule(tx,actor.id);
       if(req.query.download) reply.header("Content-Disposition",'attachment; filename="Project-ZY2-planner.json"');
-      return planner(plan,await curriculum(tx,actor.id,accessible),date,req.query.view ?? "today",now);
+      const actions={addTask:base+"/tasks",catchUpPreview:base+"/suggestions/preview"};
+      if(req.query.view==="progress") {
+        const {start,finish}=range(date,"week");
+        const {rows:tasks}=await tx.query<Pick<Task,"starts_at"|"minutes"|"completed_at">>(`SELECT starts_at,minutes,completed_at FROM planner_tasks
+          WHERE student_id=$1 AND starts_at >= $2 AND starts_at < $3`,[actor.id,start,finish]);
+        const days=Array.from({length:7},(_,i)=>{
+          const dayStart=start.getTime()+i*dayMs;
+          return {date:localDate(new Date(dayStart)),...summary(tasks.filter(task=>
+            task.starts_at.getTime()>=dayStart && task.starts_at.getTime()<dayStart+dayMs))};
+        });
+        return {date,view:"progress",timeZone:zone,start,end:finish,progress:summary(tasks),days,actions};
+      }
+      const plan=await schedule(tx,actor.id);
+      return {...planner(plan,await curriculum(tx,actor.id,accessible),date,req.query.view ?? "today",now),actions};
     }));
   app.get("/api/v1/me/camp",req=>session(req,async(tx,actor)=>{
     const now=new Date(), user=actor.id, plan=await schedule(tx,user),courses=await curriculum(tx,user,accessible);

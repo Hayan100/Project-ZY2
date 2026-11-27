@@ -75,7 +75,7 @@ test("My Camp shares an access-aware planner, consented schedules and canonical 
   assert.equal((await request("PATCH",base+"/tasks/"+fixed.id,student,{version:1,startsAt:at("11:00")})).statusCode,409);
   assert.equal((await request("POST",base+"/fixed/"+fixed.id+"/change-request",student,{startsAt:at("11:00")})).statusCode,200);
   const p={mode:"initial",startDate:future,targetDate:later,targetExam:"MDCAT",preparation:"starting",
-    weekdays:[1,2,3,4,5,6,7],startMinute:540,minutesPerDay:120};
+    weekdays:[1,2,3,4,5,6,7],startMinute:540,minutesPerDay:150};
   const suggest=(mode:string)=>request("POST",base+"/suggestions/preview",student,{profile:{...p,mode}});
   const accept=(token:string,mode:string)=>request("POST",base+"/suggestions/accept",student,{profile:{...p,mode},token});
   const first=await suggest("initial");
@@ -109,6 +109,16 @@ test("My Camp shares an access-aware planner, consented schedules and canonical 
   assert.equal(progress.json().studyPlan.total,3);
   assert.equal(progress.json().quiz.accuracy,null);
   assert.match(progress.headers["content-disposition"] as string,/attachment/);
+  const weekly=(await get(base+"?view=progress&date="+future)).json();
+  assert.equal(weekly.days.length,7);
+  assert.equal(weekly.days[0].date,new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Karachi"}).format(new Date(weekly.start)));
+  assert.equal(weekly.progress.completed,1);
+  assert.equal(weekly.progress.completedMinutes,own.minutes);
+  assert.equal(weekly.progress.total,3);
+  assert.equal(weekly.progress.plannedMinutes,70);
+  assert.equal(weekly.days.find((d:{date:string})=>d.date===future).plannedMinutes,70);
+  assert.equal(weekly.actions.catchUpPreview,"/api/v1/"+base+"/suggestions/preview");
+  assert.equal((await get(base+"?view=progress&date="+future,staff)).json().progress.total,0);
   const month=await get(base+"?view=month&date="+future+"&download=true");
   assert.match(month.headers["content-disposition"] as string,/attachment/);
   assert.ok(month.json().events.some((e:{id:string})=>e.id===event));
