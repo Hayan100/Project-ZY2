@@ -1,5 +1,5 @@
 {
-  "name": "project-zy2-api",
+  "name": "zy2-api",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -15,12 +15,15 @@
   },
   "dependencies": {
     "@fastify/helmet": "^13.2.0",
+    "better-auth": "^1.7.28",
     "fastify": "^5.12.8",
     "lru-cache": "^11.5.3",
+    "nodemailer": "^10.6.1",
     "pg": "^8.23.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.11",
+    "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.23.1",
     "node-pg-migrate": "^7.6.1",
     "typescript": "^7.0.2"

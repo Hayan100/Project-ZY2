@@ -1,3 +1,4 @@
+import { registerIdentity, mailer } from "./identity.ts";
 import { Pool } from "pg";
 import { buildApi, type Program } from "./api.ts";
 
@@ -8,6 +9,7 @@ const app = buildApi(async () => {
   const result = await db.query<Program>("SELECT code, name FROM public.public_programs ORDER BY code");
   return result.rows;
 }, true);
+registerIdentity(app, db, process.env.AUTH_ORIGIN ?? "", process.env.AUTH_SECRET ?? "", mailer());
 db.on("error", () => app.log.error("Idle PostgreSQL connection failed"));
 app.addHook("onClose", () => db.end());
 for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => void app.close());
