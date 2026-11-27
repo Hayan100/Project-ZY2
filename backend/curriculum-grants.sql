@@ -50,3 +50,14 @@ GRANT UPDATE(started,deadline) ON live_rooms TO zy2_api;
 GRANT UPDATE(controller,answers,version,submitted) ON live_sides TO zy2_api;
 GRANT UPDATE(ready,seen,votes,board_question,board_phase,board_version,board_at) ON live_players TO zy2_api;
 GRANT SELECT ON live_scores,live_focus,live_duel_responses TO zy2_api;
+GRANT SELECT ON community_moderators,doubt_staff,shared_spaces,space_follows,library_invites,community_blocks,peer_requests,
+ community_posts,library_desks,library_signals,community_reports,community_actions,community_limits,space_access,occupied_desks TO zy2_api;
+GRANT INSERT ON shared_spaces,space_follows,library_invites,community_blocks,peer_requests,community_posts,
+ library_desks,library_signals,community_reports,community_actions TO zy2_api;
+GRANT UPDATE(stoat_channel,capacity) ON shared_spaces TO zy2_api;
+GRANT UPDATE(instance,sender,expires) ON library_invites TO zy2_api;
+GRANT UPDATE(accepted,sender,recipient) ON peer_requests TO zy2_api;
+GRANT UPDATE(verified_by,removed) ON community_posts TO zy2_api;
+GRANT UPDATE(session_id,space,instance,seen,focus_start,focus_end,course,lesson,ebook,voice) ON library_desks TO zy2_api;
+GRANT DELETE ON library_desks,library_signals,space_follows,community_blocks TO zy2_api;
+GRANT UPDATE(appeal,decision,reviewer,overturned) ON community_actions TO zy2_api;
