@@ -1,6 +1,6 @@
-/research/
-/tmp/
-/*.jpeg
+node_modules/
+.env
+.env.*
 /.agents/
 /.codex/
 /.aws/
