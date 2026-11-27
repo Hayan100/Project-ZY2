@@ -1,15 +1,14 @@
+import { fail, sessionTransaction, type Identity } from "./authorized.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool, PoolClient } from "pg";
 import sharp from "sharp";
 
 type Actor = { id: string; sales: boolean; verifier: boolean; plan_approver: boolean; session: string };
-type Identity = (cookie?: string) => Promise<{ session: { id: string }; user: { id: string; emailVerified: boolean } } | null>;
 const uuid = { type: "string", format: "uuid" };
 const revision = { type: "integer", minimum: 1, maximum: 2147483647 };
 const params = { type: "object", properties: { id: uuid }, required: ["id"] };
 const body = (properties: Record<string, object>, required = Object.keys(properties)) =>
   ({ type: "object", properties, required, additionalProperties: false });
-const fail = (statusCode: number): never => { throw Object.assign(new Error("Payment request declined"), { statusCode }); };
 
 const summary = `SELECT i.id,i.student_id,i.offer_id,i.issued_at,o.product_key,o.amount_paisa,o.instructions,
   o.receiving_account,o.policy_version,o.policy_text,o.support_contact,o.starts_at,o.ends_at,o.duration_days,o.batch_id,
@@ -38,31 +37,12 @@ export function registerPayments(app: FastifyInstance, db: Pool, principal: Iden
     const next = identity?.user.emailVerified ? "confirm_invoice" : "authenticate";
     return { offer:offer.rows[0], next, checkoutOfferId:req.params.id, googleAvailable };
   });
-  async function authorized<T>(req: FastifyRequest, work: (tx: PoolClient, actor: Actor) => Promise<T>) {
-    if (req.method !== "GET" && ((req.headers.origin && req.headers.origin !== origin) ||
-        req.headers["sec-fetch-site"] === "cross-site")) fail(403);
-    const identity = await principal(req.headers.cookie);
-    if (!identity) return fail(401);
-    if (!identity.user.emailVerified) return fail(403);
-    const tx = await db.connect();
-    try {
-      await tx.query("BEGIN");
-      const { rows } = await tx.query(`SELECT s."userId" AS id,s.id AS session,p.sales,p.verifier,p.plan_approver FROM session s
-        LEFT JOIN payment_permissions p ON p.staff_id=s."userId"
-        WHERE s.id=$1 AND s."expiresAt">clock_timestamp() AND NOT EXISTS
-        (SELECT FROM temporary_credentials WHERE user_id=s."userId") FOR SHARE OF s`, [identity.session.id]);
-      if (!rows.length) fail(403);
-      const result = await work(tx, rows[0]);
-      await tx.query("COMMIT");
-      return result;
-    } catch (error) {
-      await tx.query("ROLLBACK");
-      const code = (error as { code?: string }).code;
-      if (code === "P0409" || code === "23505") fail(409);
-      if (code === "42501") fail(403);
-      if (code === "P0002") fail(404);
-      throw error;
-    } finally { tx.release(); }
+  const withSession = sessionTransaction(db, principal, origin);
+  function authorized<T>(req: FastifyRequest, work: (tx: PoolClient, actor: Actor) => Promise<T>) {
+    return withSession(req, async (tx, actor) => {
+      const permissions = await tx.query("SELECT sales,verifier,plan_approver FROM payment_permissions WHERE staff_id=$1", [actor.id]);
+      return work(tx, { ...actor, ...permissions.rows[0] });
+    });
   }
   async function lock(tx: PoolClient, value: string, namespace: number) {
     await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1,$2))", [value,namespace]);

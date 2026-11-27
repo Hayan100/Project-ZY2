@@ -70,3 +70,38 @@ Every newly verified transfer queues one email and one WhatsApp receipt in the p
 2. Supply the HTTPS `AUTH_ORIGIN`, `SMTP_URL` and `MAIL_FROM`. For WhatsApp, configure `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` (registered E.164 sender), and `TWILIO_RECEIPT_CONTENT_SID` (approved utility template). Its five variables are receipt ID, product, paid PKR amount, payment number and private invoice link. Include the instruction to sign in with the student account. Keep credentials in the deployment secret store.
 3. Run `npm run receipts` from `backend/` as a continuously supervised worker. Check pending rows and retry counts in `payment_messages` when a contact or provider needs attention. The worker retries channels independently, retains the WhatsApp message SID and checks delivery status. Email completion means SMTP accepted the message. A crash between provider acceptance and database commit can repeat a notification with the same receipt ID; financial records are unaffected.
 4. For integration tests, also create the delivery role and apply the delivery grants in the disposable test database. Provider tests simulate responses without messaging external contacts.
+
+## Curriculum authoring and publication
+
+After migrating, apply `backend/curriculum-grants.sql` as database owner, including in the disposable integration database. Assign individual academic authors and publishers by inserting their existing staff user ID into `academic_staff`. This permission covers all course outlines.
+
+| Method and route | Behavior |
+| --- | --- |
+| POST /api/v1/staff/courses | Create revision 1 with a client-generated course UUID, a fixed enrollment product key, and an outline |
+| GET /api/v1/staff/courses | List drafts and published courses with their current and published revision numbers |
+| GET /api/v1/staff/courses/:id | Read the latest draft or supply `?revision=2` to inspect a historical revision and its attribution |
+| PUT /api/v1/staff/courses/:id | Submit the current `revision` and a complete replacement `outline`. A stale edit returns 409 |
+| POST /api/v1/staff/courses/:id/publish | Submit the reviewed `revision`. Publishing switches the whole outline atomically. Repeating the current publication succeeds |
+| GET /api/v1/courses | List published course summaries covered by the signed-in account's active product enrollments |
+| GET /api/v1/courses/:id | Read the current published outline. An inaccessible or unpublished course returns 404 |
+
+Example creation payload
+
+```json
+{
+  "id": "a7a2ef24-c42b-4b52-af44-4ca014650c60",
+  "productKey": "biology-course",
+  "outline": {
+    "title": "Biology", "examYear": 2027, "provinces": ["Punjab"],
+    "chapters": [{
+      "id": "d75380ae-855f-407f-a964-57f0e7555ab5", "title": "Cells",
+      "lessons": [{
+        "id": "0741bc2f-0ed8-4316-9958-98bc60e4bee9", "title": "Cell structure",
+        "type": "video", "resourceId": "df140830-96de-443b-9cf3-279b1315205c"
+      }]
+    }]
+  }
+}
+```
+
+Array order sets chapter and lesson order. Preserve lowercase UUIDs across edits and reordering. Each lesson uses `video`, `html_article`, `mcq_quiz` or `flashcard_review` and can include `relatedResourceIds` for ebooks or other materials. Resource IDs identify content for its owning service to authorize. Exam year and province are optional applicability metadata. Drafts can be incomplete. Publication requires at least one chapter, at least one lesson in each chapter and a primary resource ID for every lesson.
