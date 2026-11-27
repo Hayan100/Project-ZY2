@@ -90,7 +90,7 @@ export function registerEbooks(app:FastifyInstance, session:ReturnType<typeof se
     let linked = false;
 
     if (query.courseId && query.lessonId) {
-      const course=await loadCourse(tx,accessible,user,query.courseId,write);
+      const course=await loadCourse(tx,accessible,user,query.courseId,write,query.lessonId);
       const lesson=course.available(query.lessonId);
       if (!(lesson.type==="html_article" && lesson.resourceId===id) && !lesson.relatedResourceIds?.includes(id)) fail(404);
       linked=true;

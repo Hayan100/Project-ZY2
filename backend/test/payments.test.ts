@@ -93,7 +93,8 @@ test("checkout continuity and independent manual payment review", {skip:!process
   assert.equal((await get(access,student.cookie)).statusCode,200);
   const secondCheck={...check,amountPaisa:20000,revision:1,reference:"OTHER-"+randomUUID()};
   const verifySecond=(payload:object)=>post(invoices+"/"+second+"/verify",payload,finance.cookie);
-  assert.equal((await verifySecond({...secondCheck,transferredAt:new Date().toISOString()})).statusCode,409);
+  const soldOut=(await owner.query("SELECT sold_out_at::text AS at FROM admission_batches WHERE id=$1",[batch])).rows[0].at;
+  assert.equal((await verifySecond({...secondCheck,transferredAt:new Date(Date.parse(soldOut)+1).toISOString()})).statusCode,409);
   assert.equal((await verifySecond({...secondCheck,reference:check.reference,transferredAt:early})).statusCode,409);
   const lateReview=await verifySecond({...secondCheck,transferredAt:early});
   assert.equal(lateReview.statusCode,200,lateReview.body);

@@ -82,7 +82,7 @@ export function registerFlashcards(app:FastifyInstance,session:ReturnType<typeof
     return {id,publishedRevision:revision,resetCardIds:resets};
   }));
   async function lessonDeck(tx:PoolClient,student:string,path:Link,write:boolean) {
-    const course=await loadCourse(tx,accessible,student,path.courseId,write);
+    const course=await loadCourse(tx,accessible,student,path.courseId,write,path.lessonId);
     if (!links(course.available(path.lessonId)).includes(path.deckId)) fail(404);
     return (await tx.query<Published>(`SELECT d.*,EXISTS(SELECT FROM deck_activations WHERE student_id=$1 AND deck_id=d.deck_id) AS active
       FROM published_decks d WHERE deck_id=$2`,[student,path.deckId])).rows[0] ?? fail(404);
@@ -101,7 +101,7 @@ export function registerFlashcards(app:FastifyInstance,session:ReturnType<typeof
   app.post<{Params:Link;Body:{studentId:string}}>(source+"/assign",{schema:{params:linkParams,body:object({studentId:textField(200)})}},
     req=>session(req,async(tx,actor)=>{
       const student=req.body.studentId;
-      if (!(await tx.query("SELECT FROM revision_mentors WHERE student_id=$1 AND mentor_id=$2",[student,actor.id])).rowCount) fail(403);
+      if (!(await tx.query("SELECT FROM active_mentors WHERE student_id=$1 AND mentor_id=$2",[student,actor.id])).rowCount) fail(403);
       return activate(tx,student,req.params,actor.id);
     }));
   app.put<{Body:{minutes:number}}>(revisionPath+"/budget",{schema:{body:object({minutes:{type:"integer",minimum:1,maximum:1440}})}},
@@ -115,7 +115,7 @@ export function registerFlashcards(app:FastifyInstance,session:ReturnType<typeof
   app.put<{Params:{studentId:string};Body:{minutes:number}}>("/api/v1/mentor/students/:studentId/revision-budget",{
     schema:{params:object({studentId:textField(200)}),body:object({minutes:{type:"integer",minimum:1,maximum:1440}})}
   },req=>session(req,async(tx,actor)=>{
-    const result=await tx.query("UPDATE revision_mentors SET suggested_minutes=$3 WHERE student_id=$1 AND mentor_id=$2",
+    const result=await tx.query("UPDATE revision_mentors SET suggested_minutes=$3 WHERE student_id=$1 AND mentor_id=$2 AND EXISTS (SELECT FROM active_mentors WHERE student_id=$1 AND mentor_id=$2)",
       [req.params.studentId,actor.id,req.body.minutes]);
     if (!result.rowCount) fail(403);
     return {suggestedMinutes:req.body.minutes};
@@ -125,7 +125,7 @@ export function registerFlashcards(app:FastifyInstance,session:ReturnType<typeof
     FROM card_reviews WHERE student_id=$1 ORDER BY reviewed_at DESC,event_id DESC LIMIT 100`,[actor.id])).rows})));
 
   async function queue(tx:PoolClient,student:string) {
-    const settings=(await tx.query(`SELECT clock_timestamp() AS now, ARRAY(SELECT suggested_minutes FROM revision_mentors WHERE student_id=$1 AND suggested_minutes IS NOT NULL ORDER BY mentor_id) AS suggestions,(SELECT minutes FROM revision_budgets WHERE student_id=$1) AS minutes,
+    const settings=(await tx.query(`SELECT clock_timestamp() AS now, ARRAY(SELECT suggested_minutes FROM active_mentors WHERE student_id=$1 AND suggested_minutes IS NOT NULL ORDER BY mentor_id) AS suggestions,(SELECT minutes FROM revision_budgets WHERE student_id=$1) AS minutes,
       (SELECT coalesce(sum(CASE WHEN introduced THEN $3::int ELSE $4::int END),0)::int FROM card_reviews WHERE student_id=$1
        AND reviewed_at >= (date_trunc('day',clock_timestamp() AT TIME ZONE $2) AT TIME ZONE $2)) AS spent`,
       [student,dailyZone,newSeconds,reviewSeconds])).rows[0];
@@ -139,6 +139,12 @@ export function registerFlashcards(app:FastifyInstance,session:ReturnType<typeof
       for (const lesson of state.lessons) if (!state.lockReason(lesson)) {
         for (const id of links(lesson)) if (!sources.has(id)) sources.set(id,{courseId:course.id,lessonId:lesson.id});
       }
+    }
+    const preparation=await tx.query("SELECT DISTINCT course_id,lesson_id FROM available_welcome_resources WHERE user_id=$1 ORDER BY course_id,lesson_id",[student]);
+    for(const p of preparation.rows) {
+      const course=await loadCourse(tx,accessible,student,p.course_id,false,p.lesson_id);
+      const l=course.lessons.find(l=>l.id===p.lesson_id);
+      if(l && !course.lockReason(l)) for(const id of links(l)) if(!sources.has(id)) sources.set(id,{courseId:p.course_id,lessonId:p.lesson_id});
     }
     const ids=[...sources.keys()];
     const decks=(await tx.query<Published>(`SELECT d.*,a.deck_id IS NOT NULL AS active FROM published_decks d

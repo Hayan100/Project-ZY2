@@ -1,3 +1,4 @@
+import { welcomeChecklist } from "./welcome.ts";
 import { libraryBooks } from "./ebooks.ts";
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
@@ -46,13 +47,13 @@ async function studentLock(tx:PoolClient,user:string) {
 }
 async function mentors(tx:PoolClient,student:string,actor:string,id:string,kind:string,old:Date|null,next:Date|null) {
   await tx.query(`INSERT INTO planner_notices(recipient,actor,item_id,kind,old_start,new_start)
-    SELECT mentor_id,$2,$3,$4,$5,$6 FROM revision_mentors WHERE student_id=$1`,[student,actor,id,kind,old,next]);
+    SELECT mentor_id,$2,$3,$4,$5,$6 FROM active_mentors WHERE student_id=$1`,[student,actor,id,kind,old,next]);
 }
 async function notice(tx:PoolClient,to:string,actor:string,id:string,kind:string,old:Date|null,next:Date|null) {
   await tx.query("INSERT INTO planner_notices(recipient,actor,item_id,kind,old_start,new_start) VALUES($1,$2,$3,$4,$5,$6)",[to,actor,id,kind,old,next]);
 }
 async function mentorCheck(tx:PoolClient,student:string,mentor:string) {
-  if(!(await tx.query("SELECT FROM revision_mentors WHERE student_id=$1 AND mentor_id=$2",[student,mentor])).rowCount) fail(403);
+  if(!(await tx.query("SELECT FROM active_mentors WHERE student_id=$1 AND mentor_id=$2",[student,mentor])).rowCount) fail(403);
 }
 async function schedule(tx:PoolClient,user:string) {
   const tasks=(await tx.query<Task>("SELECT * FROM planner_tasks WHERE student_id=$1 ORDER BY starts_at,id",[user])).rows;
@@ -146,7 +147,15 @@ export function registerPlanner(app:FastifyInstance,session:Session,academic:Aca
   const base="/api/v1/me/planner";
   async function createTask(tx:PoolClient,user:string,actor:string,b:TaskBody,preview=false,token?:string) {
     await studentLock(tx,user);
-    if(b.courseId) (await loadCourse(tx,accessible,user,b.courseId,true)).available(b.lessonId!);
+    if(b.courseId) {
+      // Mentors can plan a published lesson for the purchased batch's first week before access starts.
+      const future=user!==actor && (await tx.query(`SELECT FROM courses c JOIN course_revisions r ON (c.id,c.published_revision)=(r.course_id,r.revision)
+        JOIN enrollments e ON e.product_key=c.product_key CROSS JOIN LATERAL jsonb_array_elements(r.outline->'chapters') ch
+        CROSS JOIN LATERAL jsonb_array_elements(ch->'lessons') l WHERE c.id=$1 AND e.user_id=$2 AND l->>'id'=$3
+        AND e.revoked_at IS NULL AND e.starts_at>now() AND e.starts_at<=$4 AND $4<e.ends_at
+        AND coalesce((l->>'releaseAt')::timestamptz,'-infinity')<=$4`,[b.courseId,user,b.lessonId,b.startsAt])).rowCount;
+      if(!future) (await loadCourse(tx,accessible,user,b.courseId,true,b.lessonId)).available(b.lessonId!);
+    }
     const slot={starts_at:new Date(b.startsAt),minutes:b.minutes};
     if(b.deadline && end(slot)>Date.parse(b.deadline)) fail(422);
     const plan=await schedule(tx,user);
@@ -246,7 +255,7 @@ export function registerPlanner(app:FastifyInstance,session:Session,academic:Aca
         VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[id,b.revision+1,b.batchId,b.kind,b.title,b.startsAt,b.minutes,actor]);
       await tx.query(`INSERT INTO planner_notices(recipient,actor,item_id,kind,old_start,new_start)
         SELECT recipient,$2,$3,'calendar_published',$4,$5 FROM (SELECT unnest($1::text[]) AS recipient UNION
-        SELECT mentor_id FROM revision_mentors WHERE student_id=ANY($1::text[])) audience`,
+        SELECT mentor_id FROM active_mentors WHERE student_id=ANY($1::text[])) audience`,
         [recipients,actor,id,previous?.starts_at,b.startsAt]);
       return {id,revision:b.revision+1};
     }));
@@ -305,7 +314,8 @@ export function registerPlanner(app:FastifyInstance,session:Session,academic:Aca
       WHERE p.user_id=$1 AND p.book_id=ANY($2::uuid[]) AND EXISTS(SELECT FROM jsonb_array_elements(r.manuscript->'pages') page
       WHERE page->>'id'=p.page_id::text) ORDER BY last_read_at DESC,p.page_id LIMIT 1`,[user,[...allowed.keys()]])).rows[0];
     const rev=await revisionSummary(tx,user);
-    return {planner:{...today,tasks:today.tasks.slice(0,5),events:today.events.slice(0,5),overdue:today.overdue.slice(0,5),
+    const onboarding=await welcomeChecklist(tx,user);
+    return {onboarding,planner:{...today,tasks:today.tasks.slice(0,5),events:today.events.slice(0,5),overdue:today.overdue.slice(0,5),
       overdueCount:today.overdue.length,nextTask:nextTask?taskView(nextTask,courses):null,url:base},upcomingEvents:upcoming.map(e=>({...e,url:base+"/events/"+e.id})),
       continueLesson:quickStarts[0]?{courseId:quickStarts[0].courseId,lessonId:quickStarts[0].lessonId,title:quickStarts[0].title,url:quickStarts[0].url}:null,
       continueReading:reading?{bookId:reading.book_id,pageId:reading.page_id,title:reading.title,url:allowed.get(reading.book_id)!.url}:null,

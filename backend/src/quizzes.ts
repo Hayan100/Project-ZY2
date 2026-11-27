@@ -81,7 +81,7 @@ export function registerQuizzes(app:FastifyInstance, session:ReturnType<typeof s
     }));
 
   async function checkLesson(tx:PoolClient,user:string,path:Source,write:boolean) {
-    const course=await loadCourse(tx,accessible,user,path.courseId,write);
+    const course=await loadCourse(tx,accessible,user,path.courseId,write,path.lessonId);
     const lesson=course.available(path.lessonId);
     if (!(lesson.type==="mcq_quiz" && lesson.resourceId===path.quizId) && !lesson.relatedResourceIds?.includes(path.quizId)) fail(404);
   }
@@ -114,14 +114,21 @@ export function registerQuizzes(app:FastifyInstance, session:ReturnType<typeof s
     });
     return {revision:row.revision,total:questions.length,used:statuses.filter(s=>s.correct!==null).length,questions:statuses};
   }));
-  app.post<{Params:Source;Body:{id:string}}>(source+"/attempts",{schema:{params:object(sourceParams),body:object({id:uuid})}},
+  app.post<{Params:Source;Body:{id:string;diagnosticEnrollmentId?:string}}>(source+"/attempts",{schema:{params:object(sourceParams),body:object({id:uuid,diagnosticEnrollmentId:uuid},["id"])}},
     req=>session(req,async(tx,actor)=>{
       await checkLesson(tx,actor.id,req.params,true);
       const {quizId,courseId,lessonId}=req.params;
       const id=req.body.id;
-      await tx.query(`INSERT INTO quiz_attempts(id,student_id,quiz_id,revision,course_id,lesson_id)
-        SELECT $2,$3,$1,revision,$4,$5 FROM (${published}) current_quiz ON CONFLICT DO NOTHING`,[quizId,id,actor.id,courseId,lessonId]);
-      const result=await tx.query("SELECT id,revision FROM quiz_attempts WHERE id=$1 AND student_id=$2 AND quiz_id=$3",[id,actor.id,quizId]);
+      const diagnostic=req.body.diagnosticEnrollmentId;
+      if(diagnostic && !(await tx.query(`SELECT FROM welcome_resources p JOIN welcome_enrollments e ON e.id=p.enrollment_id
+        JOIN courses c ON c.id=p.course_id AND c.published_revision=p.revision JOIN course_revisions r ON (r.course_id,r.revision)=(c.id,p.revision)
+        CROSS JOIN LATERAL jsonb_array_elements(r.outline->'chapters') ch CROSS JOIN LATERAL jsonb_array_elements(ch->'lessons') l
+        WHERE e.id=$1 AND e.user_id=$2 AND e.route='mentored' AND e.revoked_at IS NULL AND e.mentoring_end>now()
+        AND p.course_id=$3 AND p.lesson_id=$4 AND p.diagnostic AND l->>'id'=$4::uuid::text AND l->>'resourceId'=$5`,
+        [diagnostic,actor.id,courseId,lessonId,quizId])).rowCount) fail(404);
+      await tx.query(`INSERT INTO quiz_attempts(id,student_id,quiz_id,revision,course_id,lesson_id,diagnostic_enrollment_id)
+        SELECT $2,$3,$1,revision,$4,$5,$6 FROM (${published}) current_quiz ON CONFLICT DO NOTHING`,[quizId,id,actor.id,courseId,lessonId,diagnostic]);
+      const result=await tx.query("SELECT id,revision FROM quiz_attempts WHERE id=$1 AND student_id=$2 AND quiz_id=$3 AND diagnostic_enrollment_id IS NOT DISTINCT FROM $4",[id,actor.id,quizId,diagnostic]);
       if (!result.rowCount && !(await tx.query(published,[quizId])).rowCount) fail(404);
       return result.rows[0] ?? fail(409);
     }));

@@ -1,3 +1,4 @@
+import { registerWelcome } from "./welcome.ts";
 import { registerPlanner } from "./planner.ts";
 import { registerFlashcards } from "./flashcards.ts";
 import { registerQuizzes } from "./quizzes.ts";
@@ -99,5 +100,6 @@ export function registerCurriculum(app: FastifyInstance, db: Pool, principal: Id
   registerEbooks(app, session, academic, accessible);
   registerQuizzes(app, session, academic, accessible);
   const revisionSummary=registerFlashcards(app, session, academic, accessible);
+  registerWelcome(app,session,revisionSummary);
   registerPlanner(app,session,academic,accessible,revisionSummary);
 }

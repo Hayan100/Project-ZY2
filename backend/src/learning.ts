@@ -36,9 +36,14 @@ const progressBody = { type: "object", required: ["revision","version","position
   properties: { revision: { ...counter, minimum: 1 }, version: counter, completed: { type: "boolean" },
     position: { type: "object", additionalProperties: false, properties: { videoSeconds: counter, pageId: uuid } } } };
 
-export async function loadCourse(tx: PoolClient, accessible: string, user: string, course: string, write = false) {
-  const row = (await tx.query<{ revision: number; outline: Outline; now: Date }>(
+export async function loadCourse(tx: PoolClient, accessible: string, user: string, course: string, write = false, prepLesson?:string) {
+  let row = (await tx.query<{ revision: number; outline: Outline; now: Date }>(
     `SELECT r.revision,r.outline,now() AS now ${accessible} AND c.id=$2 ${write ? "FOR SHARE OF c" : ""}`, [user,course])).rows[0];
+  if (!row && prepLesson) {
+    row=(await tx.query(`SELECT r.revision,r.outline,now() AS now FROM available_welcome_resources p
+      JOIN course_revisions r ON (r.course_id,r.revision)=(p.course_id,p.revision)
+      WHERE p.user_id=$1 AND p.course_id=$2 AND p.lesson_id=$3`,[user,course,prepLesson])).rows[0];
+  }
   if (!row) return fail(404);
   const saved = await tx.query<Saved>("SELECT * FROM lesson_progress WHERE user_id=$1 AND course_id=$2", [user,course]);
   return { ...row, ...courseLessons(row.outline,row.now,saved.rows) };
@@ -90,7 +95,7 @@ export function registerLearning(app: FastifyInstance, session: ReturnType<typeo
         }) })) } };
     }));
   app.get<Path>(lessonPath, { schema: { params } }, req => session(req, async (tx, actor) => {
-    const course = await loadCourse(tx,accessible,actor.id,req.params.id);
+    const course = await loadCourse(tx,accessible,actor.id,req.params.id,false,req.params.lessonId);
     const lesson = course.available(req.params.lessonId);
     const saved = course.progress.get(lesson.id);
     return { revision:course.revision, lesson, version:saved?.version ?? 0, position:saved?.position ?? {}, completed:saved?.completed ?? false };
@@ -98,7 +103,7 @@ export function registerLearning(app: FastifyInstance, session: ReturnType<typeo
   app.put<Path & { Body: { revision:number; version:number; position:Position; completed:boolean } }>(
     lessonPath + "/progress", { schema: { params, body:progressBody } }, req => session(req, async (tx,actor) => {
       const { revision, version, position, completed } = req.body;
-      const course = await loadCourse(tx,accessible,actor.id,req.params.id,true);
+      const course = await loadCourse(tx,accessible,actor.id,req.params.id,true,req.params.lessonId);
       if (course.revision !== revision) fail(409);
       const l = course.available(req.params.lessonId);
       if ((position.videoSeconds !== undefined && l.type !== "video") ||

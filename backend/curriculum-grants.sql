@@ -21,3 +21,15 @@ GRANT UPDATE (suggested_minutes) ON revision_mentors TO zy2_api;
 GRANT SELECT ON active_planner_batches,planner_events,current_planner_events,planner_tasks,planner_notices,accepted_plans TO zy2_api;
 GRANT INSERT ON planner_events,planner_tasks,planner_notices,accepted_plans TO zy2_api;
 GRANT UPDATE (starts_at,completed_at,version) ON planner_tasks TO zy2_api;
+GRANT SELECT ON welcome_admins,welcome_products,ghazis,welcome_templates,welcome_profiles,welcome_intakes,ghazi_assignments,
+  current_ghazis,welcome_terms,welcome_enrollments,active_mentors,welcome_slots,welcome_bookings,welcome_cover,ghazi_messages,
+  ghazi_history_grants,ghazi_access_log,ghazi_followups TO zy2_api;
+GRANT INSERT,UPDATE ON welcome_products,ghazis,welcome_terms,welcome_bookings,welcome_cover,ghazi_history_grants TO zy2_api;
+GRANT INSERT ON welcome_templates,welcome_profiles,ghazi_assignments,welcome_slots,ghazi_messages,ghazi_access_log,ghazi_followups TO zy2_api;
+GRANT INSERT,UPDATE (answers,version,submitted_at) ON welcome_intakes TO zy2_api;
+GRANT INSERT (student_id,mentor_id,managed),UPDATE (managed) ON revision_mentors TO zy2_api;
+GRANT SELECT ON available_welcome_resources,welcome_resources TO zy2_api;
+GRANT INSERT,UPDATE (revision,diagnostic,selected_by),DELETE ON welcome_resources TO zy2_api;
+GRANT SELECT ON ghazi_duty,ghazi_supervision,ghazi_waits TO zy2_api;
+GRANT INSERT,UPDATE ON ghazi_duty,ghazi_supervision TO zy2_api;
+GRANT INSERT (diagnostic_enrollment_id) ON quiz_attempts TO zy2_api;
