@@ -1,3 +1,4 @@
+import { registerPayments } from "./payments.ts";
 import { betterAuth } from "better-auth";
 import type { Pool } from "pg";
 import type { FastifyInstance } from "fastify";
@@ -19,18 +20,24 @@ export function registerIdentity(app: FastifyInstance, db: Pool, baseURL: string
   const local = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
   if (!origin.startsWith("https://") && !(local && process.env.NODE_ENV !== "production")) throw new Error("HTTPS required");
   if (secret.length < 32) throw new Error("AUTH_SECRET must contain at least 32 characters");
+  const googleId = process.env.GOOGLE_CLIENT_ID;
+  const googleSecret = process.env.GOOGLE_CLIENT_SECRET;
+  if (Boolean(googleId) !== Boolean(googleSecret)) throw new Error("Set both Google OAuth credentials");
+  const google = googleId && googleSecret ? { clientId: googleId, clientSecret: googleSecret } : undefined;
   const auth = betterAuth({
+    socialProviders: google ? { google } : {},
+    account: { encryptOAuthTokens: true, accountLinking: { requireLocalEmailVerified: true } },
     baseURL: origin, secret, database: db, appName: "Project-ZY2",
     emailAndPassword: { enabled: true, requireEmailVerification: true, minPasswordLength: 12 },
-    emailVerification: { sendOnSignUp: true, sendVerificationEmail: async ({ user, url }) => {
+    emailVerification: { sendOnSignUp: true, autoSignInAfterVerification: true, sendVerificationEmail: async ({ user, url }) => {
       await send(user.email, "Verify your Project-ZY2 email", "If you registered, verify your address:\n" + url);
     } },
     advanced: { ipAddress: { ipAddressHeaders: ["x-client-ip"] } },
     rateLimit: { enabled: true, storage: "database" },
     session: { disableSessionRefresh: true, cookieCache: { enabled: false } },
   });
-  for (const route of ["sign-up/email", "sign-in/email", "verify-email", "send-verification-email", "sign-out", "change-password"]) {
-    app.route({ method: route === "verify-email" ? "GET" : "POST", url: "/api/auth/" + route,
+  for (const route of ["sign-up/email", "sign-in/email", "verify-email", "send-verification-email", "sign-out", "change-password", ...(google ? ["sign-in/social", "callback/google"] : [])]) {
+    app.route({ method: (route === "verify-email" || route === "callback/google") ? "GET" : "POST", url: "/api/auth/" + route,
       handler: async (req, reply) => {
         const headers = new Headers({ "x-client-ip": req.ip });
         for (const key of ["cookie", "origin", "sec-fetch-site", "user-agent", "content-type"]) {
@@ -40,6 +47,14 @@ export function registerIdentity(app: FastifyInstance, db: Pool, baseURL: string
         if (req.method === "POST" && ((req.headers.origin && req.headers.origin !== origin) ||
             req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "application/json")) return reply.code(403).send();
         const body = req.body as Record<string, unknown> | undefined;
+        if (body?.checkoutOfferId !== undefined) {
+          if (typeof body.checkoutOfferId !== "string" || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(body.checkoutOfferId)) return reply.code(400).send();
+          const resume = origin + "/api/v1/checkout/" + body.checkoutOfferId;
+          body.callbackURL = resume;
+          body.newUserCallbackURL = resume;
+          body.errorCallbackURL = resume;
+          delete body.checkoutOfferId;
+        }
         if (route === "change-password" && typeof body?.currentPassword === "string" && typeof body.newPassword === "string" &&
             body.currentPassword.normalize("NFKC") === body.newPassword.normalize("NFKC")) {
           return reply.code(400).send({ error: "Choose a different password" });
@@ -60,6 +75,7 @@ export function registerIdentity(app: FastifyInstance, db: Pool, baseURL: string
   function principal(cookie: string | undefined) {
     return auth.api.getSession({ headers: new Headers(cookie ? { cookie } : {}) });
   }
+  registerPayments(app, db, principal, origin, Boolean(google));
   app.get("/api/v1/me", async (req, reply) => {
     const identity = await principal(req.headers.cookie);
     if (!identity) return reply.code(401).send();
