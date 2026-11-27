@@ -1,3 +1,4 @@
+import { familyStrip } from "./family.ts";
 import { welcomeChecklist } from "./welcome.ts";
 import { libraryBooks } from "./ebooks.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -315,7 +316,7 @@ export function registerPlanner(app:FastifyInstance,session:Session,academic:Aca
       WHERE page->>'id'=p.page_id::text) ORDER BY last_read_at DESC,p.page_id LIMIT 1`,[user,[...allowed.keys()]])).rows[0];
     const rev=await revisionSummary(tx,user);
     const onboarding=await welcomeChecklist(tx,user);
-    return {onboarding,planner:{...today,tasks:today.tasks.slice(0,5),events:today.events.slice(0,5),overdue:today.overdue.slice(0,5),
+    return {familyPresence:await familyStrip(tx,user),onboarding,planner:{...today,tasks:today.tasks.slice(0,5),events:today.events.slice(0,5),overdue:today.overdue.slice(0,5),
       overdueCount:today.overdue.length,nextTask:nextTask?taskView(nextTask,courses):null,url:base},upcomingEvents:upcoming.map(e=>({...e,url:base+"/events/"+e.id})),
       continueLesson:quickStarts[0]?{courseId:quickStarts[0].courseId,lessonId:quickStarts[0].lessonId,title:quickStarts[0].title,url:quickStarts[0].url}:null,
       continueReading:reading?{bookId:reading.book_id,pageId:reading.page_id,title:reading.title,url:allowed.get(reading.book_id)!.url}:null,

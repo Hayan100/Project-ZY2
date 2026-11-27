@@ -33,3 +33,15 @@ GRANT INSERT,UPDATE (revision,diagnostic,selected_by),DELETE ON welcome_resource
 GRANT SELECT ON ghazi_duty,ghazi_supervision,ghazi_waits TO zy2_api;
 GRANT INSERT,UPDATE ON ghazi_duty,ghazi_supervision TO zy2_api;
 GRANT INSERT (diagnostic_enrollment_id) ON quiz_attempts TO zy2_api;
+GRANT SELECT ON families,family_students,family_members,family_presence,family_messages,family_nudges,family_goals,
+  family_captains,family_awards,family_events,family_entries TO zy2_api;
+GRANT INSERT ON families,family_presence,family_messages,family_nudges,family_goals,family_captains,family_awards,family_events,family_entries TO zy2_api;
+GRANT UPDATE (last_active,sharing,focused,activity,subject) ON family_presence TO zy2_api;
+GRANT UPDATE (sent_at) ON family_nudges TO zy2_api;
+GRANT UPDATE (target,title,version) ON family_goals TO zy2_api;
+GRANT UPDATE (approved_at,ends_at,stepped_down_at) ON family_captains TO zy2_api;
+GRANT UPDATE (ranked_by,ranked_at,home_points,away_points,recorded_by) ON family_events TO zy2_api;
+GRANT DELETE ON family_entries TO zy2_api;
+GRANT UPDATE (family_id,joined_at) ON family_entries TO zy2_api;
+GRANT SELECT,INSERT,UPDATE (restricted,changed_by,changed_at) ON family_restrictions TO zy2_api;
+GRANT SELECT ON family_staff TO zy2_api;
