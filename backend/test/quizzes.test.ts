@@ -39,7 +39,12 @@ test("lesson quizzes pin revisions, lock tutor answers, preserve omissions and e
   assert.equal((await request("POST","staff/quizzes",student,create)).statusCode,403);
   assert.equal((await request("POST","staff/quizzes",staff,create)).statusCode,201);
   assert.equal((await draft(1,{...quiz,questions:[question,question]})).statusCode,400);
-  const video={id:lesson,title:"Video",type:"video",resourceId:randomUUID(),relatedResourceIds:[quizId]};
+  const book=randomUUID(), page=randomUUID();
+  const manuscript={title:"Reading",subject:"Biology",exam:"MDCAT",
+    pages:[{id:page,title:"First page",blocks:[{type:"paragraph",text:"Reading material."}]}]};
+  assert.equal((await request("POST","staff/ebooks",staff,{id:book,manuscript})).statusCode,201);
+  assert.equal((await request("POST","staff/ebooks/"+book+"/publish",staff,{revision:1})).statusCode,200);
+  const video={id:lesson,title:"Video",type:"video",resourceId:randomUUID(),relatedResourceIds:[quizId,book]};
   const primary={id:randomUUID(),title:"Practice",type:"mcq_quiz",resourceId:quizId};
   const locked={...primary,id:randomUUID(),prerequisiteIds:[video.id]};
   const unrelated={...primary,id:randomUUID(),resourceId:randomUUID()};
@@ -55,6 +60,11 @@ test("lesson quizzes pin revisions, lock tutor answers, preserve omissions and e
   const answer=(url:string,id:string,optionId:string)=>request("PUT",url+"/answers/"+id,student,{optionId});
   const submit=(url:string)=>request("POST",url+"/submit",student,{});
   await enroll(courseKey);
+  const workspace=lessonPath+lesson+"/workspace";
+  assert.deepEqual((await read(workspace)).json().quizzes,[]);
+  assert.equal((await read(lessonPath+locked.id+"/workspace")).statusCode,403);
+  const context="?courseId="+course+"&lessonId="+lesson;
+  assert.equal((await request("PUT","ebooks/"+book+"/pages/"+page+"/reading"+context,student,{revision:1})).statusCode,200);
   assert.equal((await start(picked)).statusCode,404);
   assert.equal((await publish(1)).statusCode,200);
   assert.equal((await read(source(locked.id))).statusCode,403);
@@ -65,6 +75,9 @@ test("lesson quizzes pin revisions, lock tutor answers, preserve omissions and e
   for (const res of starts) assert.deepEqual(res.json(),{id:picked,revision:1},res.body);
   assert.equal((await start(randomUUID())).statusCode,409);
   assert.equal((await read(source(primary.id))).json().activeAttemptId,picked);
+  const during=(await read(workspace)).json();
+  assert.deepEqual(during.quizzes,[{id:quizId,title:quiz.title,activeAttemptId:picked,href:"/api/v1/"+path}]);
+  assert.equal(during.books[0].href,"/api/v1/ebooks/"+book+context);
   const before=(await read(attempt)).json();
   for (const q of before.questions) assert.deepEqual(Object.keys(q).sort(),["id","options","stem"]);
   assert.equal((await answer(attempt,question.id,randomUUID())).statusCode,400);
@@ -79,6 +92,10 @@ test("lesson quizzes pin revisions, lock tutor answers, preserve omissions and e
   const result=(await submit(attempt)).json();
   assert.deepEqual([result.correct,result.incorrect,result.omitted,result.total],[1,0,1,2]);
   assert.deepEqual((await submit(attempt)).json(),result);
+  const returned=(await read(workspace)).json();
+  assert.equal(returned.quizzes[0].activeAttemptId,null);
+  assert.equal(returned.position.videoSeconds,61);
+  assert.equal(returned.books[0].resumePageId,page);
   assert.equal((await answer(attempt,other.id,a)).statusCode,409);
   assert.equal((await read(attempt)).json().questions[1].selectedOptionId,null);
   assert.equal((await read(path+"/coverage")).json().questions[1].omitted,true);
@@ -94,6 +111,7 @@ test("lesson quizzes pin revisions, lock tutor answers, preserve omissions and e
   assert.equal((await request("GET",attempt,staff)).statusCode,404);
   await owner.query("UPDATE enrollments SET revoked_at=now() WHERE user_id=$1",[student]);
   assert.equal((await read(attempt)).statusCode,404);
+  assert.equal((await read(workspace)).statusCode,404);
   assert.equal((await read(path+"/coverage")).statusCode,404);
   const results=(await read("me/quiz-results")).json().results;
   assert.equal(results.length,2);

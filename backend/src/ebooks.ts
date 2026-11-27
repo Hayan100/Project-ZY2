@@ -31,7 +31,7 @@ async function save(tx: PoolClient, id:string, version:number, manuscript:Manusc
   return { id, revision:version };
 }
 
-export async function libraryBooks(tx:PoolClient,user:string,query="") {
+export async function libraryBooks(tx:PoolClient,user:string,query="",linkedBookIds?:string[]) {
   return (await tx.query(`SELECT b.id,r.revision,r.manuscript->>'title' AS title,
       r.manuscript->>'exam' AS exam,r.manuscript->>'subject' AS subject,reading."resumePageId",reading.visited,reading.studied,
       jsonb_array_length(r.manuscript->'pages') AS "totalPages" ${published}
@@ -39,8 +39,8 @@ export async function libraryBooks(tx:PoolClient,user:string,query="") {
         count(*)::int AS visited,count(*) FILTER(WHERE p.studied)::int AS studied
         FROM jsonb_array_elements(r.manuscript->'pages') page JOIN ebook_reading p
         ON p.page_id=(page->>'id')::uuid AND p.book_id=b.id AND p.user_id=$1) reading
-      WHERE ${entitled} AND strpos(lower(concat_ws(' ',r.manuscript->>'title',r.manuscript->>'subject',r.manuscript->>'exam')),lower($2))>0
-      ORDER BY exam,subject,title,b.id`,[user,query])).rows;
+      WHERE ${linkedBookIds ? "b.id=ANY($3::uuid[])" : entitled} AND strpos(lower(concat_ws(' ',r.manuscript->>'title',r.manuscript->>'subject',r.manuscript->>'exam')),lower($2))>0
+      ORDER BY exam,subject,title,b.id`,linkedBookIds ? [user,query,linkedBookIds] : [user,query])).rows;
 }
 
 export function registerEbooks(app:FastifyInstance, session:ReturnType<typeof sessionTransaction>, academic:Academic, accessible:string) {

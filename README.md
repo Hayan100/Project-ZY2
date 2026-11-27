@@ -155,6 +155,8 @@ Link the published quiz UUID as an MCQ lesson's primary resource or in a lesson'
 
 Option selection stays local until the student commits. A correct answer earns one point, and incorrect or omitted answers earn zero. A later publication applies to new attempts. A repeat answer updates current correctness and clears omission status while preserving history. Quiz actions preserve the parent lesson's saved video timestamp, reading position and completion state. Reopen the original lesson when leaving practice.
 
+For an integrated lesson, GET `/api/v1/courses/:id/lessons/:lessonId/workspace` on entry and on return from practice. Before opening a quiz, save the current video timestamp through the lesson progress endpoint and the current ebook page through the reader’s reading endpoint. Wait for both saves to succeed. The workspace returns the saved lesson position, linked published books with their reader URLs and resume page IDs, and linked published quizzes with their URLs and the caller’s active attempt ID. Opening the workspace checks current lesson access and leaves progress untouched.
+
 `GET /api/v1/me/quiz-results` returns the student's historical result summaries, including after enrollment expiry. Reading question text or explanations still requires an eligible lesson. Apply migrations and reapply `backend/curriculum-grants.sql` for the new runtime permissions.
 
 ## Lesson-linked flashcards and spaced review

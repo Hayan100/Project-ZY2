@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
 import { fail, type sessionTransaction } from "./authorized.ts";
 import type { Lesson, Outline } from "./curriculum.ts";
+import { libraryBooks } from "./ebooks.ts";
 
 export function validatePrerequisites(lessons: Lesson[]) {
   const waiting = new Map<string, number>();
@@ -94,11 +95,29 @@ export function registerLearning(app: FastifyInstance, session: ReturnType<typeo
             { ...l, completed:progress.get(l.id)?.completed ?? false };
         }) })) } };
     }));
-  app.get<Path>(lessonPath, { schema: { params } }, req => session(req, async (tx, actor) => {
-    const course = await loadCourse(tx,accessible,actor.id,req.params.id,false,req.params.lessonId);
-    const lesson = course.available(req.params.lessonId);
+  async function lessonState(tx:PoolClient,user:string,{id,lessonId}:Path["Params"]) {
+    const course = await loadCourse(tx,accessible,user,id,false,lessonId);
+    const lesson = course.available(lessonId);
     const saved = course.progress.get(lesson.id);
     return { revision:course.revision, lesson, version:saved?.version ?? 0, position:saved?.position ?? {}, completed:saved?.completed ?? false };
+  }
+  app.get<Path>(lessonPath, { schema: { params } }, req =>
+    session(req, (tx,actor) => lessonState(tx,actor.id,req.params)));
+  app.get<Path>(lessonPath+"/workspace", { schema: { params } }, req => session(req, async (tx,actor) => {
+    const state = await lessonState(tx,actor.id,req.params);
+    const {lesson} = state;
+    const related = lesson.relatedResourceIds ?? [];
+    const bookIds = lesson.type==="html_article" && lesson.resourceId ? [lesson.resourceId,...related] : related;
+    const quizIds = lesson.type==="mcq_quiz" && lesson.resourceId ? [lesson.resourceId,...related] : related;
+    const books = await libraryBooks(tx,actor.id,"",bookIds);
+    const quizzes = await tx.query(`SELECT DISTINCT ON (r.quiz_id) r.quiz_id AS id,r.quiz->>'title' AS title,
+      a.id AS "activeAttemptId" FROM quiz_revisions r LEFT JOIN quiz_attempts a
+      ON a.quiz_id=r.quiz_id AND a.student_id=$1 AND a.submitted_at IS NULL
+      WHERE r.published_at IS NOT NULL AND r.quiz_id=ANY($2::uuid[]) ORDER BY r.quiz_id,r.revision DESC`,[actor.id,quizIds]);
+    const base = `/api/v1/courses/${req.params.id}/lessons/${lesson.id}`;
+    const context = `?courseId=${req.params.id}&lessonId=${lesson.id}`;
+    return {...state, books:books.map(book=>({...book,href:`/api/v1/ebooks/${book.id}${context}`})),
+      quizzes:quizzes.rows.map(quiz=>({...quiz,href:`${base}/quizzes/${quiz.id}`}))};
   }));
   app.put<Path & { Body: { revision:number; version:number; position:Position; completed:boolean } }>(
     lessonPath + "/progress", { schema: { params, body:progressBody } }, req => session(req, async (tx,actor) => {
