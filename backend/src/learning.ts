@@ -99,7 +99,8 @@ export function registerLearning(app: FastifyInstance, session: ReturnType<typeo
     const course = await loadCourse(tx,accessible,user,id,false,lessonId);
     const lesson = course.available(lessonId);
     const saved = course.progress.get(lesson.id);
-    return { revision:course.revision, lesson, version:saved?.version ?? 0, position:saved?.position ?? {}, completed:saved?.completed ?? false };
+    return { revision:course.revision, lesson, version:saved?.version ?? 0, position:saved?.position ?? {}, completed:saved?.completed ?? false,
+      ...(lesson.premiere?{premiereHref:`/api/v1/courses/${id}/lessons/${lessonId}/premiere`}:{}) };
   }
   app.get<Path>(lessonPath, { schema: { params } }, req =>
     session(req, (tx,actor) => lessonState(tx,actor.id,req.params)));

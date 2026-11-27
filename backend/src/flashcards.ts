@@ -7,7 +7,7 @@ import type { Lesson, Outline } from "./curriculum.ts";
 
 type CardText = { id:string; front?:string; back?:string };
 type Deck = { title:string; cards:CardText[] };
-type Published = { deck_id:string; revision:number; deck:Deck; active:boolean };
+type Published = { deck_id:string; revision:number; deck:Deck; active:boolean; personal?:boolean };
 type Link = { courseId:string; lessonId:string; deckId:string };
 type Saved = { card_id:string; version:number; card_revision:number; due_at:Date; schedule:CardInput };
 type Grade = "Again"|"Hard"|"Good"|"Easy";
@@ -122,11 +122,38 @@ export function registerFlashcards(app:FastifyInstance,session:ReturnType<typeof
   }));
   app.get(revisionPath+"/history",req=>session(req,async(tx,actor)=>({reviews:(await tx.query(`SELECT event_id AS "eventId",
     deck_id AS "deckId",card_id AS "cardId",revision,card_revision AS "cardRevision",version,rating,reviewed_at AS "reviewedAt",due_at AS "dueAt"
-    FROM card_reviews WHERE student_id=$1 ORDER BY reviewed_at DESC,event_id DESC LIMIT 100`,[actor.id])).rows})));
+    FROM student_reviews WHERE student_id=$1 ORDER BY reviewed_at DESC,event_id DESC LIMIT 100`,[actor.id])).rows})));
+
+  const personalPath=revisionPath+"/personal";
+  app.post<{Body:{id:string;front:string;back:string}}>(personalPath,{schema:{body:object({id:uuid,front:textField(4000),back:textField(8000)})}},req=>session(req,async(tx,a)=>{
+    await lock(tx,a.id,10);
+    await tx.query("INSERT INTO personal_decks(student) VALUES ($1) ON CONFLICT DO NOTHING",[a.id]);
+    await tx.query("INSERT INTO personal_card_creates(student,request) VALUES ($1,$2) ON CONFLICT DO NOTHING",[a.id,req.body.id]);
+    const args=[a.id,req.body.id,req.body.front,req.body.back];
+    await tx.query(`INSERT INTO personal_cards SELECT student,card,1,$3,$4 FROM personal_card_creates WHERE student=$1 AND request=$2
+      ON CONFLICT DO NOTHING`,args);
+    return (await tx.query(`SELECT card AS id,revision FROM personal_cards JOIN personal_card_creates USING(student,card)
+      WHERE student=$1 AND request=$2 AND revision=1 AND front=$3 AND back=$4`,args)).rows[0]??fail(409);
+  }));
+  app.get(personalPath,req=>session(req,async(tx,a)=>({cards:(await tx.query(`SELECT DISTINCT ON(card) card AS id,revision,front,back
+    FROM personal_cards WHERE student=$1 ORDER BY card,revision DESC`,[a.id])).rows})));
+  app.get<{Params:{id:string}}>(personalPath+"/:id/history",{schema:{params:deckParams}},req=>session(req,async(tx,a)=>({versions:
+    (await tx.query("SELECT revision,front,back FROM personal_cards WHERE student=$1 AND card=$2 ORDER BY revision DESC",[a.id,req.params.id])).rows})));
+  app.put<{Params:{id:string};Body:{revision:number;front:string;back:string}}>(personalPath+"/:id",{schema:{params:deckParams,
+    body:object({revision,front:textField(4000),back:textField(8000)})}},req=>session(req,async(tx,a)=>{
+      await lock(tx,a.id,10);
+      const current=(await tx.query("SELECT revision,front,back FROM personal_cards WHERE student=$1 AND card=$2 ORDER BY revision DESC LIMIT 1",
+        [a.id,req.params.id])).rows[0]??fail(404);
+      const b=req.body;
+      if(current.revision===b.revision+1 && current.front===b.front && current.back===b.back) return {revision:current.revision};
+      if(current.revision!==b.revision) fail(409);
+      return (await tx.query("INSERT INTO personal_cards VALUES ($1,$2,$3,$4,$5) RETURNING revision",
+        [a.id,req.params.id,b.revision+1,b.front,b.back])).rows[0];
+    }));
 
   async function queue(tx:PoolClient,student:string) {
     const settings=(await tx.query(`SELECT clock_timestamp() AS now, ARRAY(SELECT suggested_minutes FROM active_mentors WHERE student_id=$1 AND suggested_minutes IS NOT NULL ORDER BY mentor_id) AS suggestions,(SELECT minutes FROM revision_budgets WHERE student_id=$1) AS minutes,
-      (SELECT coalesce(sum(CASE WHEN introduced THEN $3::int ELSE $4::int END),0)::int FROM card_reviews WHERE student_id=$1
+      (SELECT coalesce(sum(CASE WHEN introduced THEN $3::int ELSE $4::int END),0)::int FROM student_reviews WHERE student_id=$1
        AND reviewed_at >= (date_trunc('day',clock_timestamp() AT TIME ZONE $2) AT TIME ZONE $2)) AS spent`,
       [student,dailyZone,newSeconds,reviewSeconds])).rows[0];
     const now:Date=settings.now;
@@ -149,12 +176,16 @@ export function registerFlashcards(app:FastifyInstance,session:ReturnType<typeof
     const ids=[...sources.keys()];
     const decks=(await tx.query<Published>(`SELECT d.*,a.deck_id IS NOT NULL AS active FROM published_decks d
       LEFT JOIN deck_activations a ON a.deck_id=d.deck_id AND a.student_id=$1 WHERE d.deck_id=ANY($2::uuid[]) ORDER BY d.deck_id`,[student,ids])).rows;
+    const personal=await tx.query(`SELECT DISTINCT ON(c.card) d.deck,c.card AS card_id,c.revision,c.front,c.back,0 AS reset_revision
+      FROM personal_cards c JOIN personal_decks d USING(student) WHERE student=$1 ORDER BY c.card,c.revision DESC`,[student]);
+    if(personal.rowCount) decks.push({deck_id:personal.rows[0].deck,revision:1,personal:true,active:true,
+      deck:{title:"Personal cards",cards:personal.rows.map(c=>({id:c.card_id}))}});
     const cardIds=[...new Set(decks.filter(d=>d.active).flatMap(d=>d.deck.cards.map(c=>c.id)))];
     const saved=await tx.query<Saved>(`SELECT DISTINCT ON(card_id) card_id,card_revision,version,schedule,due_at
-      FROM card_reviews WHERE student_id=$1 AND card_id=ANY($2::uuid[]) ORDER BY card_id,version DESC`,[student,cardIds]);
+      FROM student_reviews WHERE student_id=$1 AND card_id=ANY($2::uuid[]) ORDER BY card_id,version DESC`,[student,cardIds]);
     const schedules=new Map(saved.rows.map(c=>[c.card_id,c]));
     const content=await tx.query("SELECT * FROM academy_cards WHERE card_id=ANY($1::uuid[])",[cardIds]);
-    const canonical=new Map(content.rows.map(c=>[c.card_id,c]));
+    const canonical=new Map([...content.rows,...personal.rows].map(c=>[c.card_id,c]));
     const seen=new Set<string>();
     type Item={deckId:string;cardId:string;revision:number;cardRevision:number;version:number;front:string;back:string;dueAt:Date|null;reset:boolean};
     const due:Item[]=[], fresh:Item[]=[];
@@ -184,7 +215,7 @@ export function registerFlashcards(app:FastifyInstance,session:ReturnType<typeof
     }
     return {now,schedules,cards,cardsFor,summary:{minutes:settings.minutes,suggestedMinutes:settings.suggestions,spentSeconds:settings.spent,dueCount:due.length,
       newCount:Math.min(slots,fresh.length),newRemaining:fresh.length,forecast:Object.fromEntries([...forecast].sort()),
-      decks:decks.map(d=>({deckId:d.deck_id,title:d.deck.title,active:d.active,...sources.get(d.deck_id)}))}};
+      decks:decks.map(d=>({deckId:d.deck_id,title:d.deck.title,active:d.active,...(d.personal?{personal:true}:{}),...sources.get(d.deck_id)}))}};
   }
   app.get(revisionPath,req=>session(req,async(tx,actor)=>{
     const {summary,cards}=await queue(tx,actor.id);
@@ -197,6 +228,7 @@ export function registerFlashcards(app:FastifyInstance,session:ReturnType<typeof
     const first=cards[0];
     const cardUrl=first && `${revisionPath}/decks/${first.deckId}/cards/${first.cardId}`;
     const decks=summary.decks.map(deck=>{
+      if(deck.personal) return {...deck,href:personalPath,actionHref:revisionPath};
       const path=`/api/v1/courses/${deck.courseId}/lessons/${deck.lessonId}/decks/${deck.deckId}`;
       return {...deck,href:path,actionHref:path+(deck.active?"/review":"/activation")};
     });
@@ -228,8 +260,8 @@ export function registerFlashcards(app:FastifyInstance,session:ReturnType<typeof
     await lock(tx,deckId,9);
     await tx.query("SELECT card_id FROM academy_cards WHERE card_id=$1 FOR SHARE",[cardId]);
     const state=await queue(tx,actor.id);
-    if (!state.summary.decks.some(d=>d.deckId===deckId && d.active)) fail(404);
-    const replay=(await tx.query("SELECT * FROM card_reviews WHERE student_id=$1 AND event_id=$2",[actor.id,eventId])).rows[0];
+    const deck=state.summary.decks.find(d=>d.deckId===deckId && d.active)??fail(404);
+    const replay=(await tx.query("SELECT * FROM student_reviews WHERE student_id=$1 AND event_id=$2",[actor.id,eventId])).rows[0];
     if (replay) {
       if (replay.deck_id!==deckId || replay.card_id!==cardId || replay.version!==version+1 || replay.revision!==revision || replay.card_revision!==cardRevision || replay.rating!==rating) fail(409);
       return {eventId,version:replay.version,dueAt:replay.due_at};
@@ -239,7 +271,7 @@ export function registerFlashcards(app:FastifyInstance,session:ReturnType<typeof
     const prior=state.schedules.get(cardId);
     const before=prior && !card.reset ? prior.schedule : createEmptyCard(state.now);
     const next=scheduler.next(before,state.now,Rating[rating]).card;
-    await tx.query(`INSERT INTO card_reviews(student_id,event_id,deck_id,card_id,revision,version,rating,reviewed_at,introduced,schedule,due_at,card_revision)
+    await tx.query(`INSERT INTO ${deck.personal?"personal_reviews":"card_reviews"}(student_id,event_id,deck_id,card_id,revision,version,rating,reviewed_at,introduced,schedule,due_at,card_revision)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,[actor.id,eventId,deckId,cardId,revision,version+1,rating,state.now,!prior,next,next.due,cardRevision]);
     return {eventId,version:version+1,dueAt:next.due};
   }));

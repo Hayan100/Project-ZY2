@@ -2,9 +2,10 @@ import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
 import { fail, type Academic, type sessionTransaction } from "./authorized.ts";
 import { loadCourse } from "./learning.ts";
+import {ebookDelivery} from "./content-access.ts";
 
 type Page = { id: string; title: string; blocks: { type: "paragraph" | "heading"; text: string }[] };
-type Manuscript = { title: string; exam: string; subject: string; pages: Page[] };
+type Manuscript = { title: string; exam: string; subject: string; pdfAssetId?:string; pages: Page[] };
 type Book = { Params: { id: string } };
 type Reader = Book & { Querystring: { courseId?: string; lessonId?: string } };
 type PageRoute = Reader & { Params: { id:string; pageId:string } };
@@ -16,7 +17,7 @@ const object = (properties:Record<string,object>, required=Object.keys(propertie
   ({type:"object",properties,required,additionalProperties:false});
 const block = object({type:{enum:["heading","paragraph"]}, text:{...title,maxLength:20000}});
 const page = object({id:uuid,title,blocks:{type:"array",items:block,maxItems:500}});
-const manuscriptSchema = object({title, subject:title, exam:title, pages:{type:"array",items:page,maxItems:1000}});
+const manuscriptSchema = object({title, subject:title, exam:title,pdfAssetId:uuid, pages:{type:"array",items:page,maxItems:1000}},["title","subject","exam","pages"]);
 const bodyLimit = 4 * 1024 * 1024;
 const params = object({id:uuid});
 const context = { ...object({courseId:uuid,lessonId:uuid},[]), dependencies:{courseId:["lessonId"],lessonId:["courseId"]} };
@@ -86,8 +87,8 @@ export function registerEbooks(app:FastifyInstance, session:ReturnType<typeof se
       if (!book) return fail(404);
       if (book.published_revision!==version) {
         if (book.revision!==version) fail(409);
-        const { pages }=(await tx.query("SELECT manuscript FROM ebook_revisions WHERE book_id=$1 AND revision=$2",[id,version])).rows[0].manuscript as Manuscript;
-        if (!pages.length || pages.some(p=>!p.blocks.length)) fail(422);
+        const {pages,pdfAssetId}=(await tx.query("SELECT manuscript FROM ebook_revisions WHERE book_id=$1 AND revision=$2",[id,version])).rows[0].manuscript as Manuscript;
+        if (!pages.length || !pdfAssetId && pages.some(p=>!p.blocks.length)) fail(422);
         await tx.query("UPDATE ebooks SET published_revision=$2 WHERE id=$1",[id,version]);
         await tx.query("UPDATE ebook_revisions SET published_by=$3,published_at=now() WHERE book_id=$1 AND revision=$2",[id,version,user]);
       }
@@ -146,9 +147,104 @@ export function registerEbooks(app:FastifyInstance, session:ReturnType<typeof se
   }));
   const pagePath=library+"/:id/pages/:pageId";
   const pageSchema={params:object({id:uuid,pageId:uuid}),querystring:context};
-  app.get<PageRoute>(pagePath,{schema:pageSchema},req=>session(req,async (tx,actor)=>{
+  app.post<PageRoute>(pagePath+"/pdf-access",{schema:pageSchema},async(req,reply)=>{
+    async function authorizedPage(record:boolean) {
+      return session(req,async(tx,a)=>{
+        const book=await bookFor(tx,a.id,req.params.id,req.query);
+        const index=book.manuscript.pages.findIndex(p=>p.id===req.params.pageId);
+        if(index<0 || !book.manuscript.pdfAssetId) return fail(404);
+        if(record && !await ebookDelivery(tx,a.id,req.params.id,req.params.pageId,req.query.courseId)) return null;
+        return {assetId:book.manuscript.pdfAssetId,page:index+1,student:a.id,session:a.session,revision:book.revision};
+      });
+    }
+    const source=await authorizedPage(false);
+    if(!source) return fail(403);
+    if(!process.env.PDF_PAGE_URL) return fail(503);
+    const res=await fetch(process.env.PDF_PAGE_URL,{method:"POST",redirect:"error",signal:AbortSignal.timeout(8000),
+      headers:{"Content-Type":"application/json",...(process.env.PDF_PAGE_TOKEN?{Authorization:"Bearer "+process.env.PDF_PAGE_TOKEN}:{})},
+      body:JSON.stringify({assetId:source.assetId,page:source.page,student:source.student,revision:source.revision})});
+    if(!res.ok) return fail(503);
+    const ticket=await res.json() as {url?:string;expiresAt?:string};
+    if(!ticket.url || !URL.canParse(ticket.url) || new URL(ticket.url).protocol!=="https:" || !ticket.expiresAt ||
+      !(Date.parse(ticket.expiresAt)>Date.now() && Date.parse(ticket.expiresAt)<=Date.now()+60000)) return fail(503);
+    const current=await authorizedPage(true);
+    if(!current) return reply.code(429).send({error:"Reading access temporarily held for verification"});
+    if(source.session!==current.session || source.revision!==current.revision) return fail(409);
+    return {url:ticket.url,expiresAt:ticket.expiresAt};
+  });
+  type Ink={id:string;revision:number;version:number;points:number[][]};
+  const coordinate={type:"number",minimum:0,maximum:1};
+  app.put<PageRoute & {Body:Ink}>(pagePath+"/ink",{schema:{...pageSchema,body:object({id:uuid,revision,
+    version:{type:"integer",minimum:0,maximum:2147483646},points:{type:"array",maxItems:2048,
+      items:{type:"array",items:coordinate,minItems:2,maxItems:2}}})}},req=>session(req,async(tx,a)=>{
+    const b=req.body,book=await bookFor(tx,a.id,req.params.id,req.query,true);
+    await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1,38))",[a.id+b.id]);
+    const prior=(await tx.query(`SELECT * FROM page_ink WHERE student=$1 AND id=$2 ORDER BY version DESC LIMIT 1`,[a.id,b.id])).rows[0];
+    if(prior && (prior.book!==req.params.id || prior.page!==req.params.pageId || prior.revision!==b.revision)) fail(409);
+    if(prior?.version===b.version+1 && JSON.stringify(prior.points)===JSON.stringify(b.points)) return {id:b.id,version:prior.version};
+    if((prior?.version??0)!==b.version) fail(409);
+    if(!prior && (book.revision!==b.revision || !book.manuscript.pdfAssetId || !book.manuscript.pages.some(p=>p.id===req.params.pageId))) fail(409);
+    return (await tx.query(`INSERT INTO page_ink(student,id,version,book,page,revision,points)
+      VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,version`,[a.id,b.id,b.version+1,req.params.id,req.params.pageId,b.revision,JSON.stringify(b.points)])).rows[0];
+  }));
+  app.get<Reader>(library+"/:id/ink",{schema:{params,querystring:context}},req=>session(req,async(tx,a)=>{
+    const book=await bookFor(tx,a.id,req.params.id,req.query);
+    const {rows}=await tx.query(`SELECT DISTINCT ON(i.id) i.id,i.page,i.version,i.revision,i.points,
+      coalesce(r.manuscript->>'pdfAssetId'=$3 AND original.n=current_page.n,false) AS resolved FROM page_ink i
+      JOIN ebook_revisions r ON (r.book_id,r.revision)=(i.book,i.revision)
+      CROSS JOIN LATERAL jsonb_array_elements(r.manuscript->'pages') WITH ORDINALITY original(p,n)
+      LEFT JOIN LATERAL (SELECT n FROM jsonb_array_elements($4::jsonb) WITH ORDINALITY current(p,n) WHERE p->>'id'=i.page::text) current_page ON true
+      WHERE i.student=$1 AND i.book=$2 AND original.p->>'id'=i.page::text ORDER BY i.id,i.version DESC`,
+      [a.id,req.params.id,book.manuscript.pdfAssetId,JSON.stringify(book.manuscript.pages.map(p=>({id:p.id})))]);
+    return {strokes:rows.filter(s=>s.points.length)};
+  }));
+  type Annotation={id:string;revision:number;version:number;start:number;end:number;body:string};
+  app.put<PageRoute & {Body:Annotation}>(pagePath+"/annotations",{schema:{...pageSchema,body:object({
+    id:uuid,revision,version:{type:"integer",minimum:0,maximum:2147483646},
+    start:{type:"integer",minimum:0},end:{type:"integer",minimum:1},body:{type:"string",maxLength:20000}
+  })}},req=>session(req,async(tx,actor)=>{
+    const {id,revision,version,start,end,body}=req.body;
+    const book=await bookFor(tx,actor.id,req.params.id,req.query,true);
+    await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1,23))",[actor.id+id]);
+    const prior=(await tx.query(`SELECT * FROM ebook_annotations WHERE student=$1 AND id=$2 ORDER BY version DESC LIMIT 1`,
+      [actor.id,id])).rows[0];
+    if(prior && (prior.book!==req.params.id || prior.page!==req.params.pageId || prior.revision!==revision ||
+      prior.start_offset!==start || prior.end_offset!==end)) fail(409);
+    if(prior?.version===version+1 && prior.body===body) return {id,version:prior.version};
+    if((prior?.version??0)!==version) fail(409);
+    if(!prior) {
+      if(book.revision!==revision) fail(409);
+      const page=book.manuscript.pages.find(p=>p.id===req.params.pageId)??fail(404);
+      if(start>=end || end>page.blocks.map(b=>b.text).join("\n").length) fail(422);
+    }
+    await tx.query(`INSERT INTO ebook_annotations(student,id,book,page,revision,start_offset,end_offset,body,version)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,[actor.id,id,req.params.id,req.params.pageId,revision,start,end,body,version+1]);
+    return {id,version:version+1};
+  }));
+  app.get<Reader>(library+"/:id/annotations",{schema:{params,querystring:context}},req=>session(req,async(tx,actor)=>{
+    const book=await bookFor(tx,actor.id,req.params.id,req.query);
+    const {rows}=await tx.query(`SELECT DISTINCT ON (a.id) a.id,a.page,a.revision,a.start_offset AS start,
+      a.end_offset AS "end",a.body,a.version,coalesce(original->'blocks'=current_page->'blocks',false) AS resolved
+      FROM ebook_annotations a JOIN ebook_revisions r ON (r.book_id,r.revision)=(a.book,a.revision)
+      CROSS JOIN LATERAL jsonb_array_elements(r.manuscript->'pages') original
+      JOIN ebook_revisions c ON (c.book_id,c.revision)=(a.book,$3)
+      LEFT JOIN LATERAL (SELECT p AS current_page FROM jsonb_array_elements(c.manuscript->'pages') p
+        WHERE p->>'id'=a.page::text) latest ON true
+      WHERE a.student=$1 AND a.book=$2 AND original->>'id'=a.page::text ORDER BY a.id,a.version DESC`,
+      [actor.id,req.params.id,book.revision]);
+    return {annotations:rows};
+  }));
+  app.get<{Params:{id:string}} >("/api/v1/me/annotations/:id/history",{schema:{params}},req=>session(req,async(tx,a)=>({
+    versions:(await tx.query(`SELECT book,page,revision,start_offset AS start,end_offset AS "end",body,version
+      FROM ebook_annotations WHERE student=$1 AND id=$2 ORDER BY version DESC`,[a.id,req.params.id])).rows
+  })));
+  app.get<PageRoute>(pagePath,{schema:pageSchema},(req,reply)=>session(req,async (tx,actor)=>{
     const book=await bookFor(tx,actor.id,req.params.id,req.query);
     const page=book.manuscript.pages.find(p=>p.id===req.params.pageId) ?? fail(404);
+    if(!await ebookDelivery(tx,actor.id,req.params.id,page.id,req.query.courseId)) {
+      reply.code(429);
+      return {error:"Reading access temporarily held for verification"};
+    }
     return {revision:book.revision,page};
   }));
   app.put<PageRoute & {Body:{revision:number;studied?:boolean}}>(pagePath+"/reading",{

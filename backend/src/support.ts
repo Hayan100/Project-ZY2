@@ -16,6 +16,16 @@ const guidance = [
 
 export function registerSupport(app: FastifyInstance, session: Session) {
   const root = "/api/v1/support/tickets";
+  app.post<{Body:{category:string;ackMinutes:number;resolveMinutes:number}}>("/api/v1/staff/support/targets",{schema:{body:obj({
+    category:{enum:categories},ackMinutes:{type:"integer",minimum:1,maximum:525600},resolveMinutes:{type:"integer",minimum:1,maximum:525600}
+  })}},req=>session(req,async(tx,a)=>{
+    const b=req.body;
+    if(!(await tx.query("SELECT FROM support_reviewers WHERE reviewer=$1 AND category=$2 AND senior",[a.id,b.category])).rowCount) fail(403);
+    if(b.resolveMinutes<b.ackMinutes) fail(422);
+    await tx.query(`INSERT INTO support_targets VALUES ($1,$2,$3) ON CONFLICT(category) DO UPDATE
+      SET ack_minutes=excluded.ack_minutes,resolve_minutes=excluded.resolve_minutes`,[b.category,b.ackMinutes,b.resolveMinutes]);
+    return b;
+  }));
   app.get<{Querystring:{q?:string;category?:string}}>("/api/v1/support/help", {schema:{querystring:obj({
     q:label(120), category:{enum:categories}
   },[])}}, req => session(req, async () => {
@@ -45,7 +55,13 @@ export function registerSupport(app: FastifyInstance, session: Session) {
     const scope = staff ? `t.student<>$1 AND t.reported_staff IS DISTINCT FROM $1 AND EXISTS
       (SELECT FROM support_reviewers r WHERE r.reviewer=$1 AND r.category=t.category AND (NOT t.escalated OR r.senior))` : "t.student=$1";
     app.get(path, req => session(req, async (tx, actor) => ({
-      tickets: (await tx.query(`SELECT ${fields},t.assignee FROM support_tickets t WHERE ${scope}
+      tickets: (await tx.query(`SELECT ${fields},t.assignee,
+        (t.opened_at+g.ack_minutes*interval '1 minute') AS "ackDue",
+        (t.opened_at+g.resolve_minutes*interval '1 minute') AS "resolutionDue",
+        NOT t.resolved AND (now()>t.opened_at+g.resolve_minutes*interval '1 minute' OR
+          (now()>t.opened_at+g.ack_minutes*interval '1 minute' AND NOT EXISTS(SELECT FROM support_events h
+            WHERE h.ticket=t.id AND h.actor<>t.student))) IS TRUE AS overdue
+        FROM support_tickets t LEFT JOIN support_targets g ON g.category=t.category WHERE ${scope}
         ORDER BY t.resolved,t.updated_at DESC,t.id`, [actor.id])).rows
     })));
     app.get<Path>(path + "/:id", {schema: {params}}, req => session(req, async (tx, actor) => {

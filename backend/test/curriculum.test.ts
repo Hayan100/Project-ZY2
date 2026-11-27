@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { buildApi } from "../src/api.ts";
 import { registerRoutes } from "../src/router.ts";
+import { sendCampaignStep } from "../src/admissions.ts";
+import {createServer} from "node:http";
 
 test("academic revisions publish atomically and follow current enrollment", { skip: !process.env.TEST_DATABASE_URL }, async t => {
   const connectionString = process.env.TEST_DATABASE_URL;
@@ -82,6 +84,10 @@ test("academic revisions publish atomically and follow current enrollment", { sk
   const mark = (lessonId:string, version:number, completed:boolean, revision=5) =>
     request("PUT",path(lessonId)+"/progress",student,{revision,version,completed,position:{videoSeconds:45}});
   const detailResponse = (await read()).json();
+  assert.equal((await request("GET","/api/v1/staff/home",student)).statusCode,403);
+  assert.ok((await request("GET","/api/v1/staff/home",author)).json().queues.some((q:{queue:string})=>q.queue==="academic_reports"));
+  const matching=(await request("GET","/api/v1/me/search?q=lecture",student)).json().results;
+  assert.deepEqual(matching.map((r:{id:string})=>r.id),[lesson.id]);
   assert.equal(detailResponse.continueLessonId,lesson.id);
   assert.equal(detailResponse.outline.chapters[0].lessons[1].resourceId,undefined);
   assert.equal((await open(follow.id)).statusCode,403);
@@ -102,11 +108,103 @@ test("academic revisions publish atomically and follow current enrollment", { sk
   assert.equal((await open(follow.id)).statusCode,403);
   assert.equal((await mark(lesson.id,0,true)).statusCode,409);
   await enroll(randomUUID());
+  await owner.query("INSERT INTO marketing_staff VALUES($1,false)",[author]);
+  const approver=randomUUID();
+  await owner.query('INSERT INTO "user"(id,name,email,"emailVerified") VALUES($1,$1,$2,true)',[approver,approver+"@example.org"]);
+  await owner.query('INSERT INTO session(id,"userId",token,"createdAt","updatedAt","expiresAt") VALUES($1,$1,$1,now(),now(),now()+interval \'1 hour\')',[approver]);
+  await owner.query("INSERT INTO staff_members VALUES ($1)",[approver]);
+  await owner.query("INSERT INTO marketing_staff VALUES ($1,true)",[approver]);
+  const campaigns="/api/v1/staff/admissions-campaigns",campaignId=randomUUID();
+  const consent=(allowed:boolean)=>request("PUT","/api/v1/me/admissions-consent",student,{allowed});
+  await consent(true);
+  assert.equal((await request("POST",campaigns,author,{id:campaignId,product,steps:[{sendAt:new Date().toISOString(),subject:"Admissions",text:"Admissions update"}]})).statusCode,200);
+  assert.equal((await request("GET",campaigns+"/"+campaignId+"/preview",author)).json().eligible>=1,true);
+  assert.equal((await request("PUT",campaigns+"/"+campaignId+"/approval",author)).statusCode,403);
+  assert.equal((await request("PUT",campaigns+"/"+campaignId+"/approval",approver)).statusCode,200);
+  const mail=await runtime.connect();
+  try {
+    await consent(false);
+    assert.equal(await sendCampaignStep(mail,campaignId,student,0,async()=>assert.fail()),false);
+    await consent(true);
+    assert.equal(await sendCampaignStep(mail,campaignId,student,0,async msg=>assert.equal(msg.email,student+"@example.org")),true);
+    assert.equal(await sendCampaignStep(mail,campaignId,student,0,async()=>assert.fail()),false);
+  } finally {mail.release();}
+  const classId=randomUUID(),classPath="/api/v1/classes/"+classId,classStaff="/api/v1/staff/classes";
+  const classBody={id:classId,title:"Lecture",product,kind:"broadcast",opens:new Date(Date.now()-600000).toISOString(),
+    closes:new Date(Date.now()+600000).toISOString()};
+  assert.equal((await request("POST",classStaff,author,classBody)).statusCode,200);
+  const previousUrl=process.env.CLASSROOM_JOIN_URL,previousToken=process.env.CLASSROOM_TOKEN;
+  delete process.env.CLASSROOM_JOIN_URL;
+  delete process.env.CLASSROOM_TOKEN;
+  let adapterBody:unknown={recording:"false",joinUrl:"https://class.example.test/join"};
+  const adapter=createServer((_req,res)=>{res.setHeader("Content-Type","application/json");res.end(JSON.stringify(adapterBody));});
+  t.after(async()=>{
+    if(previousUrl===undefined) delete process.env.CLASSROOM_JOIN_URL; else process.env.CLASSROOM_JOIN_URL=previousUrl;
+    if(previousToken===undefined) delete process.env.CLASSROOM_TOKEN; else process.env.CLASSROOM_TOKEN=previousToken;
+    if(adapter.listening) await new Promise<void>(resolve=>adapter.close(()=>resolve()));
+  });
+  const join=()=>request("POST",classPath+"/join",student);
+  assert.equal((await join()).statusCode,503);
+  await new Promise<void>(resolve=>adapter.listen(0,"127.0.0.1",resolve));
+  process.env.CLASSROOM_JOIN_URL="http://127.0.0.1:"+(adapter.address() as {port:number}).port;
+  assert.equal((await join()).statusCode,503);
+  adapterBody={recording:true,joinUrl:"https://class.example.test/join"};
+  assert.deepEqual((await join()).json(),adapterBody);
+  assert.equal((await request("POST",classPath+"/presence",student)).statusCode,200);
+  const postId=randomUUID();
+  assert.equal((await request("POST",classPath+"/posts",student,{id:postId,kind:"question",body:"When is the next class?"})).statusCode,200);
+  assert.equal((await request("PUT",classStaff+"/posts/"+postId,author,{approved:true,reply:"Tomorrow."})).statusCode,200);
+  assert.equal((await request("GET",classPath+"/discussion",student)).json().posts[0].reply,"Tomorrow.");
+  const poll=randomUUID();
+  assert.equal((await request("POST",classStaff+"/"+classId+"/polls",author,{id:poll,title:"Ready?",choices:["Yes","No"],closes:classBody.closes})).statusCode,200);
+  assert.equal((await request("PUT",classPath+"/polls/"+poll,student,{choice:1})).json().choice,1);
+  assert.equal((await request("POST",classPath+"/presence",author)).statusCode,403);
+  assert.equal((await request("PUT",classStaff+"/"+classId+"/attendance",author,{id:randomUUID(),student,seconds:20,reason:"Verified attendance"})).statusCode,200);
+  assert.equal((await request("GET",classPath+"/attendance",student)).json().corrected,20);
+  await owner.query("UPDATE classes SET closes=now() WHERE id=$1",[classId]);
+  const assetId=randomUUID();
+  assert.equal((await request("PUT",classStaff+"/"+classId+"/replay",author,{assetId})).statusCode,200);
+  assert.equal((await request("POST",classPath+"/replay",student)).json().assetId,assetId);
+  const when=(minutes:number)=>new Date(Date.now()+minutes*60000).toISOString();
+  const closed={opens:when(-90),closes:when(-80),continueUntil:when(-75)};
+  const slot={opens:when(-5),closes:when(10),continueUntil:when(30)};
+  const premiere={durationSeconds:100,thresholdPercent:60,downloads:false,slots:[closed]};
+  assert.equal((await newDraft(6,[{...lesson,premiere}])).statusCode,200);
+  assert.equal((await publish(7)).statusCode,200);
+  const gate=path(lesson.id)+"/premiere";
+  const status=async()=>(await request("GET",gate,student)).json();
+  assert.equal((await request("POST",gate+"/start",student)).statusCode,403);
+  const reqId=randomUUID(),exception={id:reqId,reason:"Missed my lecture"};
+  assert.equal((await request("PUT",gate+"/requests",student,exception)).statusCode,200);
+  assert.equal((await request("PUT",gate+"/requests",student,exception)).statusCode,200);
+  const decide="/api/v1/staff/replay-requests/"+reqId,approve={decision:"approved",expiresAt:when(60)};
+  assert.equal((await request("PUT",decide,student,approve)).statusCode,403);
+  assert.equal((await request("PUT",decide,author,approve)).statusCode,200);
+  assert.equal((await status()).replay,true);
+  assert.equal((await status()).canDownload,false);
+  assert.equal((await request("POST",gate+"/download-authorization",student)).statusCode,403);
+  const newVideo={...lesson,resourceId:randomUUID(),premiere:{...premiere,downloads:true,slots:[slot]}};
+  assert.equal((await newDraft(7,[newVideo])).statusCode,200);
+  assert.equal((await publish(8)).statusCode,200);
+  assert.equal((await status()).replay,false);
+  assert.equal((await request("POST",gate+"/start",student)).json().continueUntil,slot.continueUntil);
+  const telemetry="/api/v1/staff/courses/"+id+"/lessons/"+lesson.id+"/played";
+  const record=(from:number,to:number)=>request("PUT",telemetry,author,{student,resource:newVideo.resourceId,
+    slotOpens:slot.opens,observedAt:new Date().toISOString(),from,to});
+  assert.equal((await record(0,40)).statusCode,200);
+  assert.equal((await record(20,50)).statusCode,200);
+  assert.equal((await status()).playedSeconds,50);
+  assert.equal((await status()).canDownload,false);
+  assert.equal((await record(50,62)).statusCode,200);
+  assert.equal((await status()).canDownload,true);
+  const expiry=(await request("POST",gate+"/download-authorization",student)).json().expiresAt;
+  assert.ok(Date.parse(expiry)>Date.now() && Date.parse(expiry)<=Date.now()+3600000);
   for (const change of ["starts_at=now()+interval '1 minute'", "starts_at=now()-interval '1 hour', ends_at=now()",
     "ends_at=now()+interval '1 hour',revoked_at=now()"]) {
     await owner.query("UPDATE enrollments SET "+change+" WHERE user_id=$1 AND product_key=$2",[student,product]);
     assert.equal((await read()).statusCode,404);
     assert.equal((await open(lesson.id)).statusCode,404);
+    assert.equal((await request("GET",gate,student)).statusCode,404);
     assert.equal((await request("GET",sheetPath,student)).statusCode,404);
     assert.deepEqual((await request("GET",inventory,student)).json().academy,[]);
     const bookmarks=(await request("GET",saved,student)).json().items;

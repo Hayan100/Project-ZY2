@@ -378,6 +378,8 @@ Save a personal plain-text note with PUT `/api/v1/me/notes/:id`, using a client 
 
 ### Backend integration checks
 
+See the [backend workflow guide](docs/backend-workflows.md) for premiere access, formal tests, QBank, revision, teaching and admissions APIs added after Student exports.
+
 GitHub Actions provisions PostgreSQL on pushes and pull requests. To run the same setup locally, point `DATABASE_URL` and `TEST_DATABASE_URL` at a fresh disposable database owned by the test connection. From `backend`, run `npm ci`, `npm run check`, `npm run migrate`, `psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f test/bootstrap.sql`, then `npm test`. In PowerShell use `$env:DATABASE_URL` for the psql argument.
 
 The Stoat gateway reserves a digest of the send request, releases the database connection for HTTP, and rechecks authorization before publishing the message reference. Retry an interrupted send using the same UUID and text. If access is withdrawn after Stoat accepts the message, the private bot channel may contain a message without a published LMS reference.

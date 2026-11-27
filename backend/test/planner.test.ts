@@ -54,6 +54,15 @@ test("My Camp shares an access-aware planner, consented schedules and canonical 
     await fixture.query("COMMIT");
   } catch(error) {await fixture.query("ROLLBACK"); throw error;} finally {fixture.release();}
   const eventPath="staff/planner/events/"+event;
+  await owner.query("INSERT INTO feedback_leads VALUES($1)",[staff]);
+  const feedback=randomUUID(),survey={id:feedback,batch,title:"Academy support",opens:new Date(Date.now()-60000).toISOString(),
+    periodDays:30,minGroup:3,reviewer:staff,questions:["How helpful was your check-in?"]};
+  assert.equal((await request("POST","staff/feedback",staff,survey)).statusCode,200);
+  const available=(await get("me/feedback")).json().surveys.find((s:{id:string})=>s.id===feedback);
+  assert.equal((await request("PUT","me/feedback/"+feedback,student,{period:available.period,ratings:[4],comment:"Useful"})).statusCode,200);
+  assert.deepEqual((await get("staff/feedback/"+feedback+"/trends",staff)).json().trends,[]);
+  assert.equal((await get("staff/feedback/"+feedback+"/responses",student)).statusCode,403);
+  assert.equal((await get("staff/feedback/"+feedback+"/responses",staff)).json().responses[0].comment,"Useful");
   const update={batchId:batch,kind:"mock",revision:0,title:"Mock",startsAt:at("09:00"),minutes:60};
   assert.equal((await request("POST",eventPath+"/preview",student,update)).statusCode,403);
   const preview=await request("POST",eventPath+"/preview",staff,update);

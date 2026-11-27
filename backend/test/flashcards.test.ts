@@ -128,6 +128,18 @@ test("lesson flashcards activate explicitly, share FSRS schedules and retain rev
   assert.equal((await queue()).decks.length,0);
   assert.deepEqual((await home()).myDecks,[]);
   assert.equal((await home()).startReview,null);
+  const personal=rev+"/personal",newCard={id:randomUUID(),front:"My prompt",back:"My answer"};
+  const created=(await request("POST",personal,student,newCard)).json();
+  assert.deepEqual((await request("POST",personal,student,newCard)).json(),created);
+  assert.equal((await request("PUT",personal+"/"+created.id,student,{revision:1,front:"Revised",back:newCard.back})).json().revision,2);
+  assert.equal((await get(personal+"/"+created.id+"/history")).json().versions.length,2);
+  assert.deepEqual((await request("GET",personal,staff)).json().cards,[]);
+  assert.equal((await request("PUT",rev+"/budget",student,{minutes:60})).statusCode,200);
+  const mine=(await home()).startReview;
+  const reveal=(await get(mine.revealHref.slice(8))).json();
+  assert.equal(reveal.front,"Revised");
+  assert.equal((await request("PUT",mine.rateHref.slice(8),student,{eventId:randomUUID(),version:0,
+    revision:reveal.revision,cardRevision:reveal.cardRevision,rating:"Good"})).statusCode,200);
   assert.equal((await send(c.deckId,review)).statusCode,404);
-  assert.equal((await get(rev+"/history")).json().reviews.length,4);
+  assert.equal((await get(rev+"/history")).json().reviews.length,5);
 });

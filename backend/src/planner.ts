@@ -347,13 +347,11 @@ export function registerPlanner(app:FastifyInstance,session:Session,academic:Aca
         FROM lesson_quiz_results WHERE student_id=$1 AND submitted_at>=coalesce($2,'-infinity'::timestamptz)
         AND submitted_at<coalesce($3,'infinity'::timestamptz) ORDER BY submitted_at,id`,args)).rows;
       const usage=(await tx.query(`SELECT count(DISTINCT question_id) FILTER(WHERE option_id IS NOT NULL)::int AS "uniqueAnswered",count(*) FILTER(WHERE correct)::int AS correct,
-        count(*) FILTER(WHERE NOT correct)::int AS incorrect,count(*) FILTER(WHERE option_id IS NULL)::int AS omitted FROM (
-          SELECT student_id,question_id,option_id,correct,recorded_at FROM quiz_responses r JOIN quiz_attempts a ON a.id=r.attempt_id
-          UNION ALL SELECT student_id,question_id,option_id,correct,recorded_at FROM live_duel_responses
-        ) responses WHERE student_id=$1 AND recorded_at>=coalesce($2,'-infinity'::timestamptz)
+        count(*) FILTER(WHERE NOT correct)::int AS incorrect,count(*) FILTER(WHERE option_id IS NULL)::int AS omitted
+        FROM individual_question_history WHERE student_id=$1 AND recorded_at>=coalesce($2,'-infinity'::timestamptz)
         AND recorded_at<coalesce($3,'infinity'::timestamptz)`,args)).rows[0];
       const revision=(await tx.query(`SELECT to_char(reviewed_at AT TIME ZONE 'Asia/Karachi','YYYY-MM-DD') AS day,rating,count(*)::int AS reviews
-        FROM card_reviews WHERE student_id=$1 AND reviewed_at>=coalesce($2,'-infinity'::timestamptz) AND reviewed_at<coalesce($3,'infinity'::timestamptz)
+        FROM student_reviews WHERE student_id=$1 AND reviewed_at>=coalesce($2,'-infinity'::timestamptz) AND reviewed_at<coalesce($3,'infinity'::timestamptz)
         GROUP BY 1,2 ORDER BY 1,2`,args)).rows;
       const courses=await curriculum(tx,actor.id,accessible);
       const courseCoverage=Array.from(courses,([courseId,c])=>({courseId,title:c.outline.title,total:c.lessons.length,
@@ -367,8 +365,7 @@ export function registerPlanner(app:FastifyInstance,session:Session,academic:Aca
           SELECT DISTINCT ON(quiz_id) quiz FROM quiz_revisions WHERE published_at IS NOT NULL AND quiz_id=ANY($2::uuid[])
           ORDER BY quiz_id,revision DESC
         ), eligible AS (SELECT DISTINCT (q->>'id')::uuid AS id FROM current_quizzes CROSS JOIN LATERAL jsonb_array_elements(quiz->'questions') q),
-        used AS (SELECT DISTINCT question_id FROM quiz_responses r JOIN quiz_attempts a ON a.id=r.attempt_id
-          WHERE a.student_id=$1 AND r.option_id IS NOT NULL UNION SELECT question_id FROM live_duel_responses WHERE student_id=$1 AND option_id IS NOT NULL)
+        used AS (SELECT DISTINCT question_id FROM individual_question_history WHERE student_id=$1 AND option_id IS NOT NULL)
         SELECT count(*)::int AS eligible,count(u.question_id)::int AS used FROM eligible e LEFT JOIN used u ON u.question_id=e.id`,
         [actor.id,[...quizIds]])).rows[0];
       const activity=(await tx.query(`SELECT count(*)::int AS "visitedPages",count(*) FILTER(WHERE studied)::int AS "studiedPages"

@@ -26,7 +26,8 @@ const summary = `SELECT i.id,i.student_id,i.offer_id,i.issued_at,o.product_key,o
 export function registerPayments(app: FastifyInstance, db: Pool, principal: Identity, origin: string, googleAvailable = false) {
   app.get<{ Params: { id: string } }>("/api/v1/checkout/:id", {schema:{params}}, async req => {
     const [offer,identity] = await Promise.all([
-      db.query("SELECT id,product_key,amount_paisa,policy_version,policy_text,starts_at,ends_at,duration_days FROM payment_offers WHERE id=$1 AND enabled AND (ends_at IS NULL OR ends_at>now())", [req.params.id]),
+      db.query(`SELECT id,product_key,amount_paisa,policy_version,policy_text,starts_at,ends_at,duration_days,
+        (SELECT student FROM private_offers WHERE offer=id) AS recipient FROM payment_offers WHERE id=$1 AND enabled AND (ends_at IS NULL OR ends_at>now())`, [req.params.id]),
       principal(req.headers.cookie),
     ]);
     const pending = identity && await db.query(`SELECT i.id FROM payment_invoices i WHERE i.student_id=$1 AND i.offer_id=$2
@@ -34,8 +35,14 @@ export function registerPayments(app: FastifyInstance, db: Pool, principal: Iden
     const invoiceId = pending?.rows[0]?.id;
     if (invoiceId) return { next:"resume_invoice", invoiceId, checkoutOfferId:req.params.id };
     if (!offer.rowCount) return fail(404);
+    const {recipient,...terms}=offer.rows[0];
+    if(recipient && recipient!==identity?.user.id) return fail(404);
+    if(identity?.user.emailVerified && (await db.query(`SELECT FROM enrollments e JOIN payment_offers o ON o.product_key=e.product_key
+      WHERE e.user_id=$1 AND o.id=$2 AND e.revoked_at IS NULL AND e.starts_at<coalesce(o.ends_at,now()+make_interval(days=>o.duration_days))
+      AND coalesce(o.starts_at,now())<e.ends_at`,[identity.user.id,req.params.id])).rowCount)
+      return {offer:terms,next:"resolve_overlap",checkoutOfferId:req.params.id,href:"/api/v1/me/purchase-cases"};
     const next = identity?.user.emailVerified ? "confirm_invoice" : "authenticate";
-    return { offer:offer.rows[0], next, checkoutOfferId:req.params.id, googleAvailable };
+    return { offer:terms, next, checkoutOfferId:req.params.id, googleAvailable };
   });
   const withSession = sessionTransaction(db, principal, origin);
   function authorized<T>(req: FastifyRequest, work: (tx: PoolClient, actor: Actor) => Promise<T>) {
@@ -68,6 +75,7 @@ export function registerPayments(app: FastifyInstance, db: Pool, principal: Iden
     }
     const created = await tx.query(`INSERT INTO payment_invoices(id,student_id,created_by,offer_id)
       SELECT $1,$2,$3,o.id FROM payment_offers o WHERE o.id=$4 AND enabled AND policy_version=$5
+      AND NOT EXISTS(SELECT FROM private_offers WHERE offer=o.id AND student<>$2)
       AND EXISTS (SELECT FROM "user" WHERE id=$2 AND "emailVerified")
       AND (ends_at IS NULL OR ends_at>now())
       AND NOT EXISTS (SELECT FROM admission_batches WHERE id=o.batch_id AND occupied>=capacity)
@@ -92,6 +100,98 @@ export function registerPayments(app: FastifyInstance, db: Pool, principal: Iden
     return { assigned:true };
   }));
   const phone={type:"string",pattern:"^\\+[1-9][0-9]{7,14}$"};
+  const reason={type:"string",pattern:"\\S",maxLength:2000};
+  const cases="/api/v1/me/purchase-cases";
+  app.get("/api/v1/me/renewals",req=>authorized(req,async(tx,a)=>({offers:(await tx.query(`SELECT o.id,o.product_key,o.amount_paisa,
+    o.duration_days,r.services FROM renewal_offers r JOIN payment_offers o ON o.id=r.offer WHERE o.enabled AND o.duration_days IS NOT NULL
+    AND EXISTS(SELECT FROM enrollments e WHERE e.user_id=$1 AND e.product_key=r.product AND e.ends_at<=now() AND e.revoked_at IS NULL)
+    AND NOT EXISTS(SELECT FROM private_offers p WHERE p.offer=o.id AND p.student<>$1) ORDER BY o.product_key,o.id`,[a.id])).rows})));
+  app.post<{Params:{id:string};Body:{services:string}}>("/api/v1/payments/renewals/:id",{schema:{params,body:body({services:reason})}},
+    req=>authorized(req,async(tx,a)=>{
+      if(!a.plan_approver) fail(403);
+      return (await tx.query(`INSERT INTO renewal_offers SELECT product_key,id,$2 FROM payment_offers WHERE id=$1 AND duration_days IS NOT NULL
+        AND enabled AND NOT EXISTS(SELECT FROM private_offers WHERE offer=$1) ON CONFLICT(product,offer) DO UPDATE SET services=excluded.services
+        RETURNING offer,services`,[req.params.id,req.body.services])).rows[0]??fail(422);
+    }));
+  app.get(cases,req=>authorized(req,async(tx,a)=>({cases:(await tx.query(`SELECT * FROM purchase_cases WHERE student=$1
+    OR $2::boolean ORDER BY requested_at DESC,id`,[a.id,!!a.plan_approver])).rows})));
+  app.post<{Body:{id:string;offer:string;kind:string;reason:string;amountPaisa?:number}}>(cases,{schema:{body:body({id:uuid,offer:uuid,
+    kind:{enum:["overlap","scholarship"]},reason,amountPaisa:{type:"integer",minimum:1,maximum:2147483647}},["id","offer","kind","reason"])}},
+    req=>authorized(req,async(tx,a)=>{
+      const b=req.body;
+      if((b.kind==="scholarship")!==(b.amountPaisa!==undefined)) fail(422);
+      const args=[b.id,a.id,b.offer,b.kind,b.reason,b.amountPaisa];
+      await tx.query(`INSERT INTO purchase_cases(id,student,offer,kind,reason,asked_paisa) SELECT $1,$2,o.id,$4,$5,$6
+        FROM payment_offers o WHERE o.id=$3 AND o.enabled AND NOT EXISTS(SELECT FROM private_offers p WHERE p.offer=o.id AND p.student<>$2)
+        AND ($6::int IS NULL OR $6<o.amount_paisa) ON CONFLICT DO NOTHING`,args);
+      return (await tx.query(`SELECT id,decision FROM purchase_cases WHERE (id,student,offer,kind,reason)=($1,$2,$3,$4,$5)
+        AND asked_paisa IS NOT DISTINCT FROM $6`,args)).rows[0]??fail(409);
+    }));
+  app.post<{Params:{id:string};Body:{decision:"approved"|"declined";reason:string;alternativeOffer?:string}}>(
+    "/api/v1/payments/purchase-cases/:id/decision",{schema:{params,body:body({decision:{enum:["approved","declined"]},reason,alternativeOffer:uuid},["decision","reason"])}},
+    req=>authorized(req,async(tx,a)=>{
+      if(!a.plan_approver) fail(403);
+      const c=(await tx.query("SELECT * FROM purchase_cases WHERE id=$1 FOR UPDATE",[req.params.id])).rows[0]??fail(404);
+      if(c.student===a.id) fail(403);
+      const b=req.body;
+      if(c.decision) {
+        if(c.decision!==b.decision || c.explanation!==b.reason || c.reviewer!==a.id || b.alternativeOffer && c.resolved_offer!==b.alternativeOffer) fail(409);
+        return {id:c.id,offer:c.resolved_offer};
+      }
+      let offer:string|null=null;
+      if(b.decision==="approved" && c.kind==="scholarship") {
+        if(b.alternativeOffer) fail(422);
+        offer=(await tx.query(`INSERT INTO payment_offers(product_key,amount_paisa,receiving_account,instructions,policy_version,policy_text,
+          support_contact,review_hours,starts_at,ends_at,duration_days,batch_id) SELECT product_key,$2,receiving_account,instructions,policy_version,policy_text,
+          support_contact,review_hours,starts_at,ends_at,duration_days,batch_id FROM payment_offers WHERE id=$1 AND enabled RETURNING id`,[c.offer,c.asked_paisa])).rows[0]?.id??fail(409);
+        await tx.query("INSERT INTO private_offers VALUES ($1,$2)",[offer,c.student]);
+      } else if(b.decision==="approved") {
+        offer=(await tx.query(`SELECT o.id FROM payment_offers o JOIN payment_offers original ON original.id=$1 AND original.product_key=o.product_key
+          WHERE o.id=$2 AND o.enabled AND NOT EXISTS(SELECT FROM private_offers p WHERE p.offer=o.id AND p.student<>$3)
+          AND NOT EXISTS(SELECT FROM enrollments e WHERE e.user_id=$3 AND e.product_key=o.product_key AND e.revoked_at IS NULL
+          AND e.starts_at<coalesce(o.ends_at,now()+make_interval(days=>o.duration_days)) AND coalesce(o.starts_at,now())<e.ends_at)`,
+          [c.offer,b.alternativeOffer,c.student])).rows[0]?.id??fail(422);
+      }
+      await tx.query("UPDATE purchase_cases SET decision=$2,resolved_offer=$3,explanation=$4,reviewer=$5,decided_at=now() WHERE id=$1",
+        [c.id,b.decision,offer,b.reason,a.id]);
+      return {id:c.id,offer};
+    }));
+  const refunds="/api/v1/payments/refunds";
+  app.get(refunds,req=>authorized(req,async(tx,a)=>({cases:(await tx.query(`SELECT f.*,o.policy_version,o.policy_text
+    FROM refund_cases f JOIN payment_invoices i ON f.invoice=i.id JOIN payment_offers o ON o.id=i.offer_id
+    WHERE f.student=$1 OR $2::boolean ORDER BY requested_at DESC,f.id`,[a.id,!!a.verifier])).rows})));
+  app.post<{Params:{id:string};Body:{id:string;reason:string}}>("/api/v1/invoices/:id/refund",{schema:{params,body:body({id:uuid,reason})}},
+    req=>authorized(req,async(tx,a)=>{
+      await lock(tx,req.params.id,2);
+      const args=[req.body.id,req.params.id,a.id,req.body.reason];
+      await tx.query(`INSERT INTO refund_cases(id,invoice,student,reason) SELECT $1,i.id,i.student_id,$4 FROM payment_invoices i
+        WHERE i.id=$2 AND i.student_id=$3 AND EXISTS(SELECT FROM payment_receipts WHERE invoice_id=i.id)
+        ON CONFLICT DO NOTHING`,args);
+      return (await tx.query("SELECT id,decision FROM refund_cases WHERE (id,invoice,student,reason)=($1,$2,$3,$4)",args)).rows[0]??fail(409);
+    }));
+  app.post<{Params:{id:string};Body:{decision:"approved"|"declined";amountPaisa:number;reason:string}}>(refunds+"/:id/decision",{
+    schema:{params,body:body({decision:{enum:["approved","declined"]},amountPaisa:{type:"integer",minimum:0,maximum:2147483647},reason})}
+  },req=>authorized(req,async(tx,a)=>{
+    if(!a.verifier) fail(403);
+    const f=(await tx.query("SELECT invoice FROM refund_cases WHERE id=$1",[req.params.id])).rows[0]??fail(404);
+    await lock(tx,f.invoice,2);
+    const b=req.body;
+    if((b.decision==="approved")!==(b.amountPaisa>0)) fail(422);
+    const args=[req.params.id,b.decision,b.amountPaisa,b.reason,a.id];
+    await tx.query(`UPDATE refund_cases f SET decision=$2,amount_paisa=$3,explanation=$4,reviewer=$5,decided_at=now()
+      WHERE id=$1 AND decision IS NULL AND student<>$5 AND $3<=
+        (SELECT sum(amount_paisa) FROM payment_receipts WHERE invoice_id=f.invoice)
+        - (SELECT coalesce(sum(amount_paisa),0) FROM refund_cases p WHERE p.invoice=f.invoice AND p.decision='approved')`,args);
+    return (await tx.query("SELECT id,decision,amount_paisa FROM refund_cases WHERE (id,decision,amount_paisa,explanation,reviewer)=($1,$2,$3,$4,$5)",args)).rows[0]??fail(409);
+  }));
+  app.post<{Params:{id:string};Body:{reference:string}}>(refunds+"/:id/settle",{schema:{params,body:body({reference:{...reason,maxLength:120}})}},
+    req=>authorized(req,async(tx,a)=>{
+      if(!a.verifier) fail(403);
+      const args=[req.params.id,req.body.reference,a.id];
+      await tx.query(`UPDATE refund_cases SET settlement_reference=$2,settled_at=now(),settled_by=$3
+        WHERE id=$1 AND student<>$3 AND decision='approved' AND settled_at IS NULL`,args);
+      return (await tx.query("SELECT id,settled_at FROM refund_cases WHERE id=$1 AND settlement_reference=$2 AND settled_by=$3",args)).rows[0]??fail(409);
+    }));
   app.post<{Body:{whatsapp:string}}>("/api/v1/me/receipt-whatsapp",{schema:{body:body({whatsapp:phone})}},req=>
     authorized(req,async(tx,actor)=>{
       await tx.query(`INSERT INTO receipt_contacts(user_id,whatsapp,consent_at) VALUES ($1,$2,now())

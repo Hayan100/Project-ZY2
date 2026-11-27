@@ -2,8 +2,10 @@ import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
 import { fail, type Academic, type sessionTransaction } from "./authorized.ts";
 import { loadCourse } from "./learning.ts";
+import {randomUUID} from "node:crypto";
 
-type Question = { id:string; stem:string; options:{id:string; text:string}[]; correctOptionId:string; explanation:string };
+export type Question = { id:string; stem:string; options:{id:string; text:string}[]; correctOptionId:string; explanation:string;
+  subject?:string;chapter?:string;topic?:string;difficulty?:string;bank?:"authored"|"past_paper";exam?:string;syllabus?:string };
 export type Quiz = { title:string; questions:Question[] };
 type Source = { courseId:string; lessonId:string; quizId:string };
 type AttemptPath = Source & { attemptId:string };
@@ -15,7 +17,9 @@ const textField = (maxLength:number) => ({type:"string",maxLength,pattern:"\\S"}
 const object = (properties:Record<string,object>,required=Object.keys(properties)) =>
   ({type:"object",properties,required,additionalProperties:false});
 const question = object({id:uuid,stem:textField(8000),options:{type:"array",minItems:2,maxItems:10,
-  items:object({id:uuid,text:textField(2000)})},correctOptionId:uuid,explanation:textField(8000)});
+  items:object({id:uuid,text:textField(2000)})},correctOptionId:uuid,explanation:textField(8000),subject:textField(200),chapter:textField(200),
+  topic:textField(200),difficulty:textField(80),bank:{enum:["authored","past_paper"]},exam:textField(120),syllabus:textField(120)},
+  ["id","stem","options","correctOptionId","explanation"]);
 export const quizSchema = object({title:textField(200),questions:{type:"array",maxItems:200,items:question}});
 const quizParams = object({id:uuid});
 const sourceParams = {courseId:uuid,lessonId:uuid,quizId:uuid};
@@ -48,6 +52,21 @@ export function registerQuizzes(app:FastifyInstance, session:ReturnType<typeof s
   const source="/api/v1/courses/:courseId/lessons/:lessonId/quizzes/:quizId";
   const attemptPath=source+"/attempts/:attemptId";
   const bodyLimit=2*1024*1024;
+  app.post<{Body:{title:string;rows:{stem:string;options:string[];correct:number;explanation:string;
+    subject?:string;chapter?:string;topic?:string;difficulty?:string;bank?:"authored"|"past_paper"}[]}}>(staff+"/import-preview",{
+    bodyLimit,schema:{body:object({title:textField(200),rows:{type:"array",minItems:1,maxItems:200,items:object({
+      stem:textField(8000),options:{type:"array",minItems:2,maxItems:10,items:textField(2000)},correct:{type:"integer",minimum:1,maximum:10},
+      explanation:textField(8000),subject:textField(200),chapter:textField(200),topic:textField(200),difficulty:textField(80),bank:{enum:["authored","past_paper"]}
+    },["stem","options","correct","explanation"])}})}
+  },req=>academic(req,async()=>{
+    const issues:{row:number;message:string}[]=[];
+    const questions=req.body.rows.map(({options,correct,...content},i)=>{
+      if(correct>options.length) issues.push({row:i+1,message:"The correct option exceeds the number of options."});
+      const choices=options.map(text=>({id:randomUUID(),text}));
+      return {...content,id:randomUUID(),options:choices,correctOptionId:choices[correct-1]?.id};
+    });
+    return {issues,quiz:issues.length?null:{title:req.body.title,questions}};
+  }));
   async function latest(tx:PoolClient,id:string) {
     // Serialize edits and publication even when the latest draft is a new row.
     await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1,8))",[id]);
@@ -107,10 +126,10 @@ export function registerQuizzes(app:FastifyInstance, session:ReturnType<typeof s
     const row=(await tx.query(published,[req.params.quizId])).rows[0] ?? fail(404);
     const questions=(row.quiz as Quiz).questions;
     const history=await tx.query(`SELECT r.question_id,
-      (array_agg(r.correct ORDER BY r.recorded_at DESC,a.id DESC) FILTER (WHERE r.correct IS NOT NULL))[1] AS correct,
-      (array_agg(r.option_id IS NULL ORDER BY r.recorded_at DESC,a.id DESC))[1] AS omitted
-      FROM quiz_responses r JOIN quiz_attempts a ON a.id=r.attempt_id
-      WHERE a.student_id=$1 AND r.question_id=ANY($2::uuid[]) GROUP BY r.question_id`,[actor.id,questions.map(q=>q.id)]);
+      (array_agg(r.correct ORDER BY r.recorded_at DESC,r.attempt DESC NULLS LAST) FILTER (WHERE r.correct IS NOT NULL))[1] AS correct,
+      (array_agg(r.option_id IS NULL ORDER BY r.recorded_at DESC,r.attempt DESC NULLS LAST))[1] AS omitted
+      FROM individual_question_history r
+      WHERE r.student_id=$1 AND r.question_id=ANY($2::uuid[]) GROUP BY r.question_id`,[actor.id,questions.map(q=>q.id)]);
     const byId=new Map(history.rows.map(r=>[r.question_id,r]));
     const statuses=questions.map(q=>{
       const last=byId.get(q.id);
@@ -140,8 +159,26 @@ export function registerQuizzes(app:FastifyInstance, session:ReturnType<typeof s
     const attempt=await owned(tx,actor.id,req.params,false);
     const responses=await tx.query<Answer>("SELECT question_id,option_id,correct FROM quiz_responses WHERE attempt_id=$1",[attempt.id]);
     const answers=new Map(responses.rows.map(a=>[a.question_id,a]));
+    const marks=await tx.query("SELECT question FROM marked_questions WHERE student=$1 AND question=ANY($2::uuid[]) ORDER BY question",
+      [actor.id,attempt.quiz.questions.map(q=>q.id)]);
+    const flags=await tx.query("SELECT question FROM attempt_flags WHERE attempt=$1 ORDER BY question",[attempt.id]);
     return {id:attempt.id,revision:attempt.revision,title:attempt.quiz.title,submittedAt:attempt.submitted_at,
+      marked:marks.rows.map(r=>r.question),flags:flags.rows.map(r=>r.question),
       questions:attempt.quiz.questions.map(q=>present(q,answers.get(q.id)))};
+  }));
+  app.get("/api/v1/me/marked-questions",req=>session(req,async(tx,a)=>({questions:
+    (await tx.query("SELECT question FROM marked_questions WHERE student=$1 ORDER BY question",[a.id])).rows.map(r=>r.question)})));
+  app.put<{Params:AttemptPath & {questionId:string};Body:{kind:"mark"|"flag";selected:boolean}}>(attemptPath+"/questions/:questionId/selection",{
+    schema:{params:object({...attemptParams,questionId:uuid}),body:object({kind:{enum:["mark","flag"]},selected:{type:"boolean"}})}
+  },req=>session(req,async(tx,a)=>{
+    const attempt=await owned(tx,a.id,req.params,true);
+    const {questionId}=req.params,{kind,selected}=req.body;
+    if(!attempt.quiz.questions.some(q=>q.id===questionId)) fail(404);
+    if(kind==="flag" && attempt.submitted_at) fail(409);
+    const [table,column,key]=kind==="mark"?["marked_questions","student",a.id]:["attempt_flags","attempt",attempt.id];
+    await tx.query(selected?`INSERT INTO ${table}(${column},question) VALUES ($1,$2) ON CONFLICT DO NOTHING`
+      :`DELETE FROM ${table} WHERE ${column}=$1 AND question=$2`,[key,questionId]);
+    return {questionId,kind,selected};
   }));
   app.put<{Params:AttemptPath & {questionId:string};Body:{optionId:string}}>(attemptPath+"/answers/:questionId",{
     schema:{params:object({...attemptParams,questionId:uuid}),body:object({optionId:uuid})}

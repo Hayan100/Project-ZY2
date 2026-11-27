@@ -35,8 +35,8 @@ export const activeCaptain=`FROM family_captains c JOIN family_students s ON s.f
 async function roster(tx:PoolClient,family:string) {
   return (await tx.query(`SELECT m.user_id AS id,u.name,m.user_id=f.mentor_id AS ghazi,p.last_active AS "lastActive",
     coalesce(p.last_active>now()-interval '5 minutes',false) AS online,
-    CASE WHEN p.sharing AND NOT p.focused AND NOT EXISTS(SELECT FROM live_focus WHERE player=m.user_id) AND p.last_active>now()-interval '5 minutes' THEN p.activity END AS activity,
-    CASE WHEN p.sharing AND NOT p.focused AND NOT EXISTS(SELECT FROM live_focus WHERE player=m.user_id) AND p.last_active>now()-interval '5 minutes' THEN p.subject END AS subject
+    CASE WHEN p.sharing AND NOT p.focused AND NOT EXISTS(SELECT FROM assessment_focus WHERE player=m.user_id) AND p.last_active>now()-interval '5 minutes' THEN p.activity END AS activity,
+    CASE WHEN p.sharing AND NOT p.focused AND NOT EXISTS(SELECT FROM assessment_focus WHERE player=m.user_id) AND p.last_active>now()-interval '5 minutes' THEN p.subject END AS subject
     FROM family_members m JOIN families f ON f.id=m.family_id JOIN "user" u ON u.id=m.user_id
     LEFT JOIN family_presence p ON p.user_id=m.user_id WHERE m.family_id=$1 ORDER BY ghazi DESC,u.name,m.user_id`,[family])).rows;
 }
@@ -45,7 +45,7 @@ async function mine(tx:PoolClient,user:string) {
     WHERE m.user_id=$1 ORDER BY f.name,f.id`,[user])).rows;
 }
 async function focused(tx:PoolClient,user:string) {
-  return !!(await tx.query("SELECT FROM family_presence WHERE user_id=$1 AND focused UNION ALL SELECT FROM live_focus WHERE player=$1",[user])).rowCount;
+  return !!(await tx.query("SELECT FROM family_presence WHERE user_id=$1 AND focused UNION ALL SELECT FROM assessment_focus WHERE player=$1",[user])).rowCount;
 }
 export async function familyStrip(tx:PoolClient,user:string) {
   if(await focused(tx,user)) return [];

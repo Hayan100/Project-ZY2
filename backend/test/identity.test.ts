@@ -77,6 +77,22 @@ test("verified login, replacement, activation and product access", { skip: !proc
   assert.equal((await get("me", cookie)).statusCode, 401);
   const fresh = sessionCookie(await post("sign-in/email", {email,password:newPassword}));
   assert.equal((await get("access/test-product", fresh)).statusCode, 200);
+  const recoveryEmail=randomUUID()+"@example.org",recoveryPassword=randomBytes(18).toString("hex");
+  const signup2=await post("sign-up/email",{name:"Recovery student",email:recoveryEmail,password:recoveryPassword});
+  assert.equal(signup2.statusCode,200);
+  const verify=new URL(message.trim().split("\n").at(-1)!);
+  await app.inject(verify.pathname+verify.search);
+  const recover=()=>app.inject({method:"POST",url:"/api/v1/staff/account-recovery",headers:{origin,cookie:fresh},payload:{
+    id:recoveryId,student:signup2.json().user.id,evidence:"Verified enrollment reference",decision:"approved"}});
+  const recoveryId=randomUUID();
+  assert.equal((await recover()).statusCode,403);
+  await owner.query("INSERT INTO recovery_staff VALUES($1)",[me.id]);
+  assert.equal((await recover()).statusCode,200);
+  const token=new URLSearchParams(new URL(message.trim().split("\n").at(-1)!).hash.slice(1)).get("token");
+  assert.ok(token);
+  const reset={token,newPassword:randomBytes(18).toString("hex")};
+  assert.equal((await post("reset-password",reset)).statusCode,200);
+  assert.ok((await post("reset-password",reset)).statusCode>=400);
   assert.equal((await post("sign-out", {}, fresh)).statusCode, 200);
   assert.equal((await get("me", fresh)).statusCode, 401);
 });

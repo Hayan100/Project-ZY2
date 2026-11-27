@@ -128,6 +128,19 @@ test("checkout continuity and independent manual payment review", {skip:!process
     assert.equal((await post("/api/v1/payments/verify-whatsapp",{whatsapp,studentId:learner.id},finance.cookie)).statusCode,200);
   }
   const delivered=new Set<string>();
+  const refund=randomUUID(),address="/api/v1/payments/refunds/"+refund;
+  const scholarship=randomUUID();
+  assert.equal((await post("/api/v1/me/purchase-cases",{id:scholarship,offer,kind:"scholarship",reason:"Request assistance",amountPaisa:10000},student.cookie)).statusCode,200);
+  const resolved=await post("/api/v1/payments/purchase-cases/"+scholarship+"/decision",{decision:"approved",reason:"Approved concession"},finance.cookie);
+  assert.equal(resolved.statusCode,200,resolved.body);
+  assert.equal((await get("/api/v1/checkout/"+resolved.json().offer,other.cookie)).statusCode,404);
+  assert.equal((await get("/api/v1/checkout/"+resolved.json().offer,student.cookie)).json().next,"resolve_overlap");
+  assert.equal((await post(base+"/refund",{id:refund,reason:"Request review"},other.cookie)).statusCode,200);
+  const decision={decision:"approved",amountPaisa:1000,reason:"Approved under invoice terms"};
+  assert.equal((await post(address+"/decision",decision,other.cookie)).statusCode,403);
+  assert.equal((await post(address+"/decision",{...decision,amountPaisa:60000},finance.cookie)).statusCode,409);
+  assert.equal((await post(address+"/decision",decision,finance.cookie)).statusCode,200);
+  assert.equal((await post(address+"/settle",{reference:"BANK-"+refund},finance.cookie)).statusCode,200);
   const fake:Dispatch=async notice=>{
     assert.ok(notice.destination);
     assert.equal(notice.kind,"receipt");

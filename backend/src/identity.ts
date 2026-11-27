@@ -4,6 +4,8 @@ import { betterAuth } from "better-auth";
 import type { Pool } from "pg";
 import type { FastifyInstance } from "fastify";
 import nodemailer from "nodemailer";
+import {fail,sessionTransaction} from "./authorized.ts";
+import {randomUUID} from "node:crypto";
 
 export function mailer() {
   const url = process.env.SMTP_URL;
@@ -29,7 +31,12 @@ export function registerIdentity(app: FastifyInstance, db: Pool, baseURL: string
     socialProviders: google ? { google } : {},
     account: { encryptOAuthTokens: true, accountLinking: { requireLocalEmailVerified: true } },
     baseURL: origin, secret, database: db, appName: "Project-ZY2",
-    emailAndPassword: { enabled: true, requireEmailVerification: true, minPasswordLength: 12 },
+    emailAndPassword: { enabled: true, requireEmailVerification: true, minPasswordLength: 12,revokeSessionsOnPasswordReset:true,
+      sendResetPassword:async({user,token})=>{
+        if(!user.emailVerified) fail(403);
+        await send(user.email,"Reset your Project-ZY2 password","Your recovery request was approved. Choose a new password at\n"+
+          origin+"/reset-password#token="+encodeURIComponent(token));
+      } },
     emailVerification: { sendOnSignUp: true, autoSignInAfterVerification: true, sendVerificationEmail: async ({ user, url }) => {
       await send(user.email, "Verify your Project-ZY2 email", "If you registered, verify your address:\n" + url);
     } },
@@ -37,7 +44,7 @@ export function registerIdentity(app: FastifyInstance, db: Pool, baseURL: string
     rateLimit: { enabled: true, storage: "database" },
     session: { disableSessionRefresh: true, cookieCache: { enabled: false } },
   });
-  for (const route of ["sign-up/email", "sign-in/email", "verify-email", "send-verification-email", "sign-out", "change-password", ...(google ? ["sign-in/social", "callback/google"] : [])]) {
+  for (const route of ["sign-up/email", "sign-in/email", "verify-email", "send-verification-email", "sign-out", "change-password","reset-password", ...(google ? ["sign-in/social", "callback/google"] : [])]) {
     app.route({ method: (route === "verify-email" || route === "callback/google") ? "GET" : "POST", url: "/api/auth/" + route,
       handler: async (req, reply) => {
         const headers = new Headers({ "x-client-ip": req.ip });
@@ -83,6 +90,33 @@ export function registerIdentity(app: FastifyInstance, db: Pool, baseURL: string
     return auth.api.getSession({ headers: new Headers(cookie ? { cookie } : {}) });
   }
   registerRoutes(app, db, principal, origin);
+  const recovery=sessionTransaction(db,principal,origin);
+  type Decision={id:string;student:string;evidence:string;decision:"approved"|"declined"};
+  app.post<{Body:Decision}>("/api/v1/staff/account-recovery",{schema:{body:{type:"object",additionalProperties:false,
+    required:["id","student","evidence","decision"],properties:{id:{type:"string",format:"uuid"},student:{type:"string",maxLength:200},
+      evidence:{type:"string",pattern:"\\S",maxLength:1000},decision:{enum:["approved","declined"]}}}}},async req=>{
+    const b=req.body,lease=randomUUID();
+    const approved=await recovery(req,async(tx,a)=>{
+      if(a.id===b.student || !(await tx.query("SELECT FROM recovery_staff WHERE staff=$1",[a.id])).rowCount) fail(403);
+      const target=(await tx.query('SELECT email FROM "user" WHERE id=$1 AND "emailVerified"',[b.student])).rows[0]??fail(404);
+      const args=[b.id,b.student,a.id,b.evidence,b.decision];
+      const inserted=await tx.query("INSERT INTO recovery_decisions(id,student,reviewer,evidence,decision) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",args);
+      if(!inserted.rowCount && !(await tx.query("SELECT FROM recovery_decisions WHERE (id,student,reviewer,evidence,decision)=($1,$2,$3,$4,$5)",args)).rowCount) fail(409);
+      if(b.decision==="declined") return null;
+      const claim=await tx.query(`UPDATE recovery_decisions SET lease=$2,lease_until=now()+interval '5 minutes'
+        WHERE id=$1 AND sent_at IS NULL AND (lease IS NULL OR lease_until<=now()) RETURNING id`,[b.id,lease]);
+      if(claim.rowCount) return target.email as string;
+      if(!(await tx.query("SELECT FROM recovery_decisions WHERE id=$1 AND sent_at IS NOT NULL",[b.id])).rowCount) fail(409);
+      return null;
+    });
+    if(approved) {
+      try {
+        await auth.api.requestPasswordReset({body:{email:approved}});
+        await db.query("UPDATE recovery_decisions SET sent_at=now(),lease=NULL WHERE id=$1 AND lease=$2",[b.id,lease]);
+      } catch(e) {await db.query("UPDATE recovery_decisions SET lease=NULL WHERE id=$1 AND lease=$2",[b.id,lease]);throw e;}
+    }
+    return {id:b.id,decision:b.decision};
+  });
   registerPayments(app, db, principal, origin, Boolean(google));
   app.get("/api/v1/me", async (req, reply) => {
     const identity = await principal(req.headers.cookie);

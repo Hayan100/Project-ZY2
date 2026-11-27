@@ -3,7 +3,9 @@ import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
 import { fail,type Academic,type sessionTransaction } from "./authorized.ts";
 
-export type Lesson = { estimatedMinutes?:number; id: string; title: string; type: string; resourceId?: string; relatedResourceIds?: string[]; releaseAt?: string; prerequisiteIds?: string[] };
+export type Premiere = {durationSeconds:number; thresholdPercent:number; downloads:boolean;
+  slots:{opens:string;closes:string;continueUntil:string}[]};
+export type Lesson = { premiere?:Premiere; estimatedMinutes?:number; id: string; title: string; type: string; resourceId?: string; relatedResourceIds?: string[]; releaseAt?: string; prerequisiteIds?: string[] };
 export type Outline = {
   title: string; exam?:string; examYear?: number; provinces?: string[];
   chapters: { id: string; title: string; lessons: Lesson[] }[];
@@ -16,9 +18,13 @@ const object = (properties: Record<string, object>, required = Object.keys(prope
   ({ type: "object", properties, required, additionalProperties: false });
 const array = (items: object, maxItems: number) => ({ type: "array", items, maxItems });
 const params = object({ id: uuid });
+const instant={type:"string",format:"date-time",pattern:"(Z|[+-][0-9]{2}:[0-9]{2})$"};
+const premiere=object({durationSeconds:{type:"integer",minimum:1,maximum:86400},
+  thresholdPercent:{type:"integer",minimum:1,maximum:100},downloads:{type:"boolean"},
+  slots:{...array(object({opens:instant,closes:instant,continueUntil:instant}),128),minItems:1}});
 const lesson = object({ estimatedMinutes:{type:"integer",minimum:1,maximum:1440}, id: uuid, title, type: { enum: ["video","html_article","mcq_quiz","flashcard_review"] },
   releaseAt: { type: "string", format: "date-time", pattern: "(Z|[+-][0-9]{2}:[0-9]{2})$" }, prerequisiteIds: { ...array(uuid, 64), uniqueItems: true },
-  resourceId: uuid, relatedResourceIds: { ...array(uuid, 64), uniqueItems: true } }, ["id","title","type"]);
+  premiere,resourceId: uuid, relatedResourceIds: { ...array(uuid, 64), uniqueItems: true } }, ["id","title","type"]);
 const chapter = object({ id: uuid, title, lessons: array(lesson, 500) });
 const outlineSchema = object({ title, exam:title, chapters: array(chapter, 200), examYear: { type: "integer", minimum: 2000, maximum: 9999 },
   provinces: { ...array(title, 32), uniqueItems: true } }, ["title","chapters"]);
@@ -27,6 +33,15 @@ const bodyLimit = 1024 * 1024;
 async function saveRevision(tx: PoolClient, id: string, version: number, outline: Outline, author: string) {
   const ids = outline.chapters.flatMap(ch => [ch.id, ...ch.lessons.map(l => l.id)]);
   if (new Set(ids).size !== ids.length) fail(400);
+  for(const {lessons} of outline.chapters) for(const l of lessons) if(l.premiere) {
+    if(l.type!=="video") fail(422);
+    let previousClose=-Infinity;
+    for(const slot of l.premiere.slots) {
+      const open=Date.parse(slot.opens),close=Date.parse(slot.closes);
+      if(open<previousClose || open>=close || close>Date.parse(slot.continueUntil)) fail(422);
+      previousClose=close;
+    }
+  }
   await tx.query(`INSERT INTO course_revisions(course_id,revision,outline,authored_by)
     VALUES ($1,$2,$3,$4)`, [id, version, outline, author]);
   return { id, revision: version };
