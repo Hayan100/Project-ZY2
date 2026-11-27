@@ -344,3 +344,13 @@ Community returns the help URL in `help`. GET `/api/v1/support/help` with a veri
 | Regex denial of service, prototype pollution and template injection | Help search bounds input and uses literal substring matching. JSON parsing rejects prototype-poisoning keys. Help articles and receipts use plain text or structured JSON. Render returned text as text in clients. These checks do not constitute a performance audit of every dependency. |
 | GraphQL aliases, XML external entities and WebSocket hijacking | The application registers REST routes. It has no GraphQL, XML document import or WebSocket upgrade handler. Payment-proof decoding accepts JPEG/PNG signatures and limits decoded pixel count. Voice signaling uses session-authorized HTTP routes. |
 | PostgreSQL views and row-level security | The backend uses a limited database role and checks the current actor and entitlements in application queries. Database views are server-side resources. Keep database credentials and SQL access off clients. Owner-rights views require a separate privilege review before exposing SQL directly or introducing row-level policies. [PostgreSQL view security](https://www.postgresql.org/docs/current/sql-createview.html) |
+
+### Inventory
+
+Apply migration 18 and the curriculum grants. GET `/api/v1/inventory` for the signed-in student’s academy reference sheets and saved Community resources. This is a separate destination beside Ebooks.
+
+| Action | API under `/api/v1` |
+| --- | --- |
+| Author a reference sheet | Academic staff POST `/staff/inventory/sheets` with a client UUID `id`, `title`, and plain-text `body`. Repeat the same submission safely. Link the sheet ID in a lesson’s `relatedResourceIds` and publish the course revision. To replace a sheet, publish the replacement ID in the course. |
+| Read a sheet | Open its Inventory `href`, or use `/inventory/courses/:course/lessons/:lesson/sheets/:id` from the lesson. The reader checks active enrollment, the published lesson link, its release time and prerequisites at each request. A sheet shared across multiple accessible lessons appears once. |
+| Save a Community resource | PUT `/inventory/community/:id` with `{"saved":true}` using the approved resource post’s ID. Inventory reads the original text or link and checks channel access, moderation, restrictions and blocks. A saved reference can become visible again after access returns. Send `{"saved":false}` to forget it, including while it is hidden. |

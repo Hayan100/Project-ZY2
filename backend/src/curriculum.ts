@@ -1,4 +1,5 @@
 import { registerCommunity } from "./community.ts";
+import { registerInventory } from "./inventory.ts";
 import { registerSupport } from "./support.ts";
 import { registerFeatureBoard } from "./feature-board.ts";
 import { registerLive } from "./live.ts";
@@ -108,7 +109,8 @@ export function registerCurriculum(app: FastifyInstance, db: Pool, principal: Id
   registerWelcome(app,session,revisionSummary);
   registerFamilies(app,session);
   registerLive(app,session,academic);
-  registerCommunity(app,session,accessible);
+  const visibleChannels=registerCommunity(app,session,accessible);
+  registerInventory(app,session,academic,accessible,visibleChannels);
   registerSupport(app,session);
   registerFeatureBoard(app,session);
   registerPlanner(app,session,academic,accessible,revisionSummary);

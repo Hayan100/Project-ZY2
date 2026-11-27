@@ -70,3 +70,5 @@ GRANT DELETE ON feature_votes TO zy2_api;
 GRANT SELECT,INSERT ON resource_reviews TO zy2_api;
 GRANT UPDATE(status,reviewer,version) ON resource_reviews TO zy2_api;
 GRANT SELECT ON published_resource_posts TO zy2_api;
+GRANT SELECT,INSERT ON academy_sheets,inventory_saves TO zy2_api;
+GRANT DELETE ON inventory_saves TO zy2_api;

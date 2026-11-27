@@ -21,7 +21,8 @@ test("academic revisions publish atomically and follow current enrollment", { sk
   const staff = "/api/v1/staff/courses", detail = staff+"/"+id, mine = "/api/v1/courses";
   const request = (method: "GET"|"POST"|"PUT", url: string, cookie: string, payload?: object) =>
     app.inject({ method, url, headers: { cookie, origin }, payload });
-  const lesson = { id: randomUUID(), title: "Lecture", type: "video", resourceId: randomUUID() };
+  const sheet = {id:randomUUID(),title:"Reference sheet",body:"Review the lecture vocabulary."};
+  const lesson = { id: randomUUID(), title: "Lecture", type: "video", resourceId: randomUUID(),relatedResourceIds:[sheet.id] };
   const outline = { title: "Biology", chapters: [{ id: randomUUID(), title: "Cells", lessons: [lesson] }] };
   const create = () => request("POST",staff,author,{id, productKey: product, outline: {title:"Draft",chapters:[]}});
   const read = () => request("GET",mine+"/"+id,student);
@@ -30,6 +31,11 @@ test("academic revisions publish atomically and follow current enrollment", { sk
   await owner.query("INSERT INTO staff_members VALUES ($1)", [author]);
   assert.equal((await create()).statusCode,403);
   await owner.query("INSERT INTO academic_staff VALUES ($1)", [author]);
+  const sheets="/api/v1/staff/inventory/sheets", inventory="/api/v1/inventory";
+  const sheetPath=inventory+"/courses/"+id+"/lessons/"+lesson.id+"/sheets/"+sheet.id;
+  assert.equal((await request("POST",sheets,student,sheet)).statusCode,403);
+  assert.equal((await request("POST",sheets,author,sheet)).statusCode,200);
+  assert.equal((await request("POST",sheets,author,{...sheet,body:"different"})).statusCode,409);
   assert.equal((await create()).statusCode,201);
   assert.equal((await request("GET",detail,student)).statusCode,403);
   assert.equal((await request("GET",mine,"")).statusCode,401);
@@ -38,9 +44,12 @@ test("academic revisions publish atomically and follow current enrollment", { sk
     VALUES ($1,$2,now(),now()+interval '1 hour')`, [student,key]);
   await enroll(product);
   assert.equal((await read()).statusCode,404);
+  assert.deepEqual((await request("GET",inventory,student)).json().academy,[]);
   const writes = await Promise.all([save(1,"Biology"),save(1,"Biology")]);
   assert.deepEqual(writes.map(r => r.statusCode).sort(),[200,409]);
   assert.equal((await publish(2)).statusCode,200);
+  assert.equal((await request("GET",inventory,student)).json().academy[0].href,sheetPath);
+  assert.deepEqual((await request("GET",sheetPath,student)).json(),sheet);
   assert.equal((await publish(2)).statusCode,200);
   assert.equal((await save(2,"Revised")).statusCode,200);
   assert.equal((await read()).json().outline.title,"Biology");
@@ -68,6 +77,7 @@ test("academic revisions publish atomically and follow current enrollment", { sk
   assert.equal((await open(follow.id)).statusCode,403);
   assert.equal((await mark(follow.id,0,true)).statusCode,403);
   assert.equal((await open(future.id)).statusCode,403);
+  assert.equal((await request("GET",inventory+"/courses/"+id+"/lessons/"+future.id+"/sheets/"+sheet.id,student)).statusCode,403);
   const saves = await Promise.all([mark(lesson.id,0,false),mark(lesson.id,0,false)]);
   assert.deepEqual(saves.map(res=>res.statusCode).sort(),[200,409]);
   assert.deepEqual((await open(lesson.id)).json().position,{videoSeconds:45});
@@ -86,6 +96,8 @@ test("academic revisions publish atomically and follow current enrollment", { sk
     await owner.query("UPDATE enrollments SET "+change+" WHERE user_id=$1 AND product_key=$2",[student,product]);
     assert.equal((await read()).statusCode,404);
     assert.equal((await open(lesson.id)).statusCode,404);
+    assert.equal((await request("GET",sheetPath,student)).statusCode,404);
+    assert.deepEqual((await request("GET",inventory,student)).json().academy,[]);
     assert.equal((await mark(lesson.id,0,true,6)).statusCode,404);
     assert.deepEqual((await request("GET",mine,student)).json().courses,[]);
   }

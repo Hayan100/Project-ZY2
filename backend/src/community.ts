@@ -62,10 +62,11 @@ export function registerCommunity(app:FastifyInstance,session:Session,accessible
     await moderator(tx,a.id);
     return (await tx.query("UPDATE shared_spaces SET stoat_channel=$2 WHERE id=$1 AND kind IN('general','media') AND (stoat_channel IS NULL OR stoat_channel=$2) RETURNING id",[req.params.id,req.body.channel])).rows[0]??fail(409);
   }));
-  async function visible(tx:PoolClient,user:string,id?:string) {
+  async function visible(tx:PoolClient,user:string,id?:string,kind?:string) {
     await allowed(tx,user);
     const rows=(await tx.query(`SELECT s.*,EXISTS(SELECT FROM space_follows f WHERE f.space=s.id AND f.actor=$1) AS followed
-      FROM shared_spaces s JOIN space_access a USING(id) WHERE a.actor=$1 AND s.capacity IS NULL AND ($2::uuid IS NULL OR s.id=$2) ORDER BY s.name,s.id`,[user,id])).rows;
+      FROM shared_spaces s JOIN space_access a USING(id) WHERE a.actor=$1 AND s.capacity IS NULL AND ($2::uuid IS NULL OR s.id=$2)
+      AND ($3::text IS NULL OR s.kind=$3) ORDER BY s.name,s.id`,[user,id,kind])).rows;
     const result=[];
     for(const s of rows) {
       if(s.course) {
@@ -179,6 +180,7 @@ export function registerCommunity(app:FastifyInstance,session:Session,accessible
   }));
   registerResourceReviews(app,session);
   registerLibrary(app,session,accessible);
+  return visible;
 }
 
 function registerResourceReviews(app:FastifyInstance,session:Session) {
