@@ -1,0 +1,35 @@
+import Fastify from "fastify";
+import helmet from "@fastify/helmet";
+import { LRUCache } from "lru-cache";
+
+export type Program = { code: string; name: string };
+
+export function buildApi(readPublished: () => Promise<Program[]>, logger = false) {
+  const app = Fastify({ logger, bodyLimit: 16_384 });
+  app.register(helmet);
+
+  // Each process refreshes independently. Publishing changes appear within 60 seconds.
+  const catalog = new LRUCache<string, Program[]>({
+    max: 1, ttl: 60_000, allowStale: false,
+    fetchMethod: readPublished,
+  });
+
+  app.addHook("onRequest", async (_request, reply) => {
+    reply.header("Cache-Control", "no-store");
+  });
+  app.get("/health/live", async () => ({ status: "ok" }));
+  app.get("/api/v1/programs", async (_request, reply) => {
+    const programs = await catalog.fetch("public");
+    // Downstream caches revalidate so their TTL cannot extend the publishing delay.
+    reply.header("Cache-Control", "public, max-age=0, must-revalidate");
+    return { programs };
+  });
+  app.setErrorHandler((error, request, reply) => {
+    const status = typeof error === "object" && error && "statusCode" in error
+      ? Number(error.statusCode) : 500;
+    if (status >= 400 && status < 500) return reply.code(status).send({ error: "Invalid request" });
+    request.log.error({ requestId: request.id }, "Request failed");
+    return reply.code(503).send({ error: "Service unavailable" });
+  });
+  return app;
+}

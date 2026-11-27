@@ -1,0 +1,28 @@
+{
+  "name": "project-zy2-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.6"
+  },
+  "scripts": {
+    "dev": "node --watch src/server.ts",
+    "start": "node src/server.ts",
+    "migrate": "node-pg-migrate up --migrations-dir migrations",
+    "check": "tsc --noEmit",
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@fastify/helmet": "^13.2.0",
+    "fastify": "^5.12.8",
+    "lru-cache": "^11.5.3",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.11",
+    "@types/pg": "^8.23.1",
+    "node-pg-migrate": "^7.6.1",
+    "typescript": "^7.0.2"
+  }
+}
