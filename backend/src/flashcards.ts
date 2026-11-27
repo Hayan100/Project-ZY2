@@ -190,6 +190,21 @@ export function registerFlashcards(app:FastifyInstance,session:ReturnType<typeof
     const {summary,cards}=await queue(tx,actor.id);
     return {...summary,cards:cards.map(({back,reset,...card})=>card)};
   }));
+  app.get(revisionPath+"/home",req=>session(req,async(tx,actor)=>{
+    const {now,summary,cards}=await queue(tx,actor.id);
+    const date=dayFormat.format(now);
+    const laterToday=summary.forecast[date] ?? 0;
+    const first=cards[0];
+    const cardUrl=first && `${revisionPath}/decks/${first.deckId}/cards/${first.cardId}`;
+    const decks=summary.decks.map(deck=>{
+      const path=`/api/v1/courses/${deck.courseId}/lessons/${deck.lessonId}/decks/${deck.deckId}`;
+      return {...deck,href:path,actionHref:path+(deck.active?"/review":"/activation")};
+    });
+    return {date,timeZone:dailyZone,dueToday:summary.dueCount+laterToday,dueNow:summary.dueCount,
+      laterToday,newCount:summary.newCount,startReview:first?{deckId:first.deckId,cardId:first.cardId,
+        front:first.front,revealHref:cardUrl,rateHref:cardUrl+"/review"}:null,
+      myDecks:decks.filter(d=>d.active),recommendedDecks:decks.filter(d=>!d.active),forecast:summary.forecast};
+  }));
   app.get<{Params:Link}>(source+"/review",{schema:{params:linkParams}},req=>session(req,async(tx,actor)=>{
     const deck=await lessonDeck(tx,actor.id,req.params,false);
     if (!deck.active) fail(409);

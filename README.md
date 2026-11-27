@@ -163,6 +163,8 @@ For an integrated lesson, GET `/api/v1/courses/:id/lessons/:lessonId/workspace` 
 
 ## Lesson-linked flashcards and spaced review
 
+Open `GET /api/v1/me/revision/home` for the student’s Revision home. `dueToday` counts outstanding scheduled reviews through the end of the Karachi day, including overdue cards. `dueNow` and `laterToday` split that total. `startReview` opens the first eligible card, prioritizing due reviews before budgeted new cards. It is null when the queue is empty. Show its front, GET `revealHref` when the student reveals the answer, then PUT the rating to `rateHref` using the returned versions and a fresh event ID. Refresh home after grading. My Decks links to active deck reviews with GET. Recommended decks link to explicit activation with PUT. The forecast groups upcoming scheduled reviews by local date.
+
 Academic staff use `/api/v1/staff/decks`. GET lists decks. GET `/:id` previews the latest draft or a specific `?revision=N`. PUT `/:id` with `{revision,deck:{title,cards}}` to save a draft. Supply revision 0 to create the deck and the current draft revision thereafter. An owned card contains a lowercase UUID, `front` and `back`. Reference an already published academy card in another deck using just its `id`. Its original deck owns the wording.
 
 POST `/:id/publish` with the reviewed revision. The first publication needs at least one card. Publication updates shared wording everywhere and retains each student's schedule. To require relearning, explicitly include the affected owned card IDs in `resetCardIds` when publishing a new revision. The card becomes due immediately for students who previously reviewed it. The publication records the actor and affected cards. All prior ratings remain in history.
