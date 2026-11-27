@@ -1,3 +1,4 @@
+import {deliverNext,queueReminders,type Dispatch} from "../src/delivery.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID, randomBytes } from "node:crypto";
@@ -76,13 +77,21 @@ test("checkout continuity and independent manual payment review", {skip:!process
   assert.equal((await post(item+"/verify",{...check,amountPaisa:1},finance.cookie)).statusCode,409);
   const second=randomUUID();
   assert.equal((await post(invoices,{id:second,offerId:offer,policyVersion:"v1"},other.cookie)).statusCode,200);
+  const base=invoices+"/"+second;
+  const schedule=[{amountPaisa:20000,dueAt:new Date(Date.now()-120000).toISOString()},{amountPaisa:30000,dueAt:new Date(Date.now()-60000).toISOString()}];
+  assert.equal((await post(base+"/installments/request",{schedule},other.cookie)).statusCode,200);
+  assert.equal((await post(base+"/installments/approve",{schedule},sales.cookie)).statusCode,403);
+  await owner.query("UPDATE payment_permissions SET plan_approver=true WHERE staff_id=$1",[finance.id]);
+  const approval=await post(base+"/installments/approve",{schedule},finance.cookie);
+  assert.equal(approval.statusCode,200,approval.body);
+  assert.equal((await get(access,other.cookie)).statusCode,403);
   assert.equal((await post(invoices+"/"+second+"/assign-sales",{staffId:sales.id},other.cookie)).statusCode,200);
   assert.equal((await post(invoices+"/"+second+"/proofs",{revision:1,image},sales.cookie)).statusCode,200);
   const early=new Date().toISOString();
   const verify=()=>post(item+"/verify",check,finance.cookie);
   for(const res of await Promise.all([verify(),verify()])) assert.equal(res.statusCode,200,res.body);
   assert.equal((await get(access,student.cookie)).statusCode,200);
-  const secondCheck={...check,revision:1,reference:"OTHER-"+randomUUID()};
+  const secondCheck={...check,amountPaisa:20000,revision:1,reference:"OTHER-"+randomUUID()};
   const verifySecond=(payload:object)=>post(invoices+"/"+second+"/verify",payload,finance.cookie);
   assert.equal((await verifySecond({...secondCheck,transferredAt:new Date().toISOString()})).statusCode,409);
   assert.equal((await verifySecond({...secondCheck,reference:check.reference,transferredAt:early})).statusCode,409);
@@ -91,4 +100,44 @@ test("checkout continuity and independent manual payment review", {skip:!process
   assert.equal((await owner.query("SELECT extra_seat FROM payment_receipts WHERE invoice_id=$1",[second])).rows[0].extra_seat,true);
   assert.equal((await owner.query("SELECT occupied FROM admission_batches WHERE id=$1",[batch])).rows[0].occupied,2);
   assert.equal((await owner.query("SELECT count(*)::int AS n FROM enrollments WHERE user_id=$1",[student.id])).rows[0].n,1);
+  assert.equal(lateReview.json().balance_paisa,30000);
+  assert.equal((await get(access,other.cookie)).statusCode,200);
+  assert.ok((await get("/api/v1/payments/overdue",finance.cookie)).json().some((i:{id:string})=>i.id===second));
+  const delivery=new Pool({connectionString,options:"-c role=zy2_delivery"});
+  t.after(()=>delivery.end());
+  await queueReminders(delivery);
+  const extended=await post(base+"/installments/extend",{part:2,dueAt:new Date(Date.now()+86400000).toISOString(),reason:"Agreed extension"},finance.cookie);
+  assert.equal(extended.statusCode,200,extended.body);
+  const previous=(await owner.query("SELECT * FROM enrollments WHERE user_id=$1",[other.id])).rows[0];
+  assert.equal((await post(base+"/proofs",{revision:2,image},other.cookie)).statusCode,200);
+  const finalPayment={...secondCheck,revision:2,amountPaisa:30000,reference:randomUUID(),transferredAt:new Date().toISOString()};
+  for (const res of await Promise.all([verifySecond(finalPayment),verifySecond(finalPayment)])) {
+    assert.equal(res.statusCode,200,res.body);
+    assert.equal(res.json().status,"paid");
+  }
+  const receipts=(await get(base+"/receipts",other.cookie)).json();
+  assert.deepEqual(receipts.map((r:{amount_paisa:number})=>r.amount_paisa),[20000,30000]);
+  assert.deepEqual((await owner.query("SELECT * FROM enrollments WHERE user_id=$1",[other.id])).rows,[previous]);
+  assert.equal((await owner.query("SELECT occupied FROM admission_batches WHERE id=$1",[batch])).rows[0].occupied,2);
+  for (const learner of [student,other]) {
+    const whatsapp=learner===student ? "+15555550100" : "+15555550101";
+    const contact=await post("/api/v1/me/receipt-whatsapp",{whatsapp},learner.cookie);
+    assert.equal(contact.statusCode,200,contact.body);
+    assert.equal((await post("/api/v1/payments/verify-whatsapp",{whatsapp,studentId:learner.id},learner.cookie)).statusCode,403);
+    assert.equal((await post("/api/v1/payments/verify-whatsapp",{whatsapp,studentId:learner.id},finance.cookie)).statusCode,200);
+  }
+  const delivered=new Set<string>();
+  const fake:Dispatch=async notice=>{
+    assert.ok(notice.destination);
+    assert.equal(notice.kind,"receipt");
+    const key=notice.receipt_id+":"+notice.channel;
+    assert.ok(!delivered.has(key));
+    delivered.add(key);
+    return {complete:true};
+  };
+  await deliverNext(delivery,async()=>{throw new Error("transient failure");});
+  await owner.query("UPDATE payment_messages SET next_attempt=now() WHERE attempts=1");
+  while(await deliverNext(delivery,fake)) {}
+  assert.equal(delivered.size,6);
+  assert.equal((await owner.query("SELECT count(*)::int n FROM payment_messages WHERE accepted_at IS NULL")).rows[0].n,0);
 });

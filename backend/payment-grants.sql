@@ -2,3 +2,9 @@ GRANT SELECT ON payment_offers, payment_invoices, payment_proofs, payment_receip
 GRANT INSERT (id,student_id,created_by,offer_id), UPDATE (assigned_sales) ON payment_invoices TO zy2_api;
 GRANT INSERT (invoice_id,revision,submitted_by,screenshot), UPDATE (correction,reviewed_by,reviewed_at) ON payment_proofs TO zy2_api;
 GRANT EXECUTE ON FUNCTION approve_transfer(text,uuid,integer,integer,text,timestamptz) TO zy2_api;
+GRANT SELECT, INSERT (invoice_id,schedule,agreed_by), UPDATE (approved_by,approved_at) ON installment_plans TO zy2_api;
+GRANT SELECT ON installment_balance TO zy2_api;
+GRANT UPDATE (schedule,agreed_at) ON installment_plans TO zy2_api;
+GRANT DELETE ON installment_plans TO zy2_api;
+GRANT SELECT,INSERT (user_id,whatsapp,consent_at),UPDATE (whatsapp,verified_by,consent_at),DELETE ON receipt_contacts TO zy2_api;
+GRANT SELECT,INSERT (invoice_id,part,due_at,approved_by,reason) ON installment_extensions TO zy2_api;
