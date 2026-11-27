@@ -6,3 +6,8 @@ GRANT SELECT ON ebooks, ebook_revisions, ebook_reading TO zy2_api;
 GRANT INSERT (id,library_product_key), UPDATE (revision,published_revision) ON ebooks TO zy2_api;
 GRANT INSERT (book_id,revision,manuscript,authored_by), UPDATE (published_by,published_at) ON ebook_revisions TO zy2_api;
 GRANT INSERT (user_id,book_id,page_id,studied), UPDATE (last_read_at,studied) ON ebook_reading TO zy2_api;
+GRANT SELECT ON quiz_revisions, quiz_attempts, quiz_responses TO zy2_api;
+GRANT INSERT (quiz_id,revision,quiz,authored_by), UPDATE (published_by,published_at) ON quiz_revisions TO zy2_api;
+GRANT INSERT (id,student_id,quiz_id,revision,course_id,lesson_id), UPDATE (submitted_at) ON quiz_attempts TO zy2_api;
+GRANT INSERT (attempt_id,question_id,option_id,correct) ON quiz_responses TO zy2_api;
+GRANT SELECT ON lesson_quiz_results TO zy2_api;

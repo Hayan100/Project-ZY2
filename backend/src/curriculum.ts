@@ -1,3 +1,4 @@
+import { registerQuizzes } from "./quizzes.ts";
 import { registerEbooks } from "./ebooks.ts";
 import { registerLearning, validatePrerequisites } from "./learning.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
@@ -94,4 +95,5 @@ export function registerCurriculum(app: FastifyInstance, db: Pool, principal: Id
     `SELECT c.id,r.revision,r.outline->>'title' AS title ${accessible} ORDER BY title,c.id`, [actor.id])).rows })));
   registerLearning(app, session, accessible);
   registerEbooks(app, session, academic, accessible);
+  registerQuizzes(app, session, academic, accessible);
 }

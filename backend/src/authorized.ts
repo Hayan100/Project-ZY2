@@ -2,6 +2,7 @@ import type { FastifyRequest } from "fastify";
 import type { Pool, PoolClient } from "pg";
 
 export type Identity = (cookie?: string) => Promise<{ session: { id: string }; user: { id: string; emailVerified: boolean } } | null>;
+export type Academic = <T>(req: FastifyRequest, work: (tx: PoolClient, user: string) => Promise<T>) => Promise<T>;
 export type SessionActor = { id: string; session: string };
 export function fail(statusCode: number): never {
   throw Object.assign(new Error("Request declined"), { statusCode });

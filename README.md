@@ -137,3 +137,22 @@ GET the collection to list books. GET `/:id` to preview the latest manuscript, o
 Inside Academy, append both `courseId` and `lessonId` query parameters to reader, search and reading-progress requests. The published, available lesson must reference that book as its HTML article or a related resource. Without lesson context, reads require an active enrollment for the book's library product. Both paths use the same student/book/page reading record. Course-only books can omit the library product key. Marking a page studied does not complete a lesson.
 
 Apply migrations and reapply `backend/curriculum-grants.sql` to install the ebook runtime permissions.
+
+## Lesson-linked MCQ quizzes
+
+Academic staff use `/api/v1/staff/quizzes`. POST a client-generated quiz UUID in `id` and a `quiz` object containing `title` and ordered `questions`. Each question has a stable `id`, a `stem`, 2–10 options (each with an `id` and `text`), one `correctOptionId`, and a plain-text `explanation`. Use lowercase UUIDs and retain the question ID across corrections or reuse. GET the collection to list quizzes or GET `/:id?revision=N` to preview a revision. PUT the current `revision` and a complete `quiz` to `/:id` to revise it. POST the reviewed `revision` to `/:id/publish`.
+
+Link the published quiz UUID as an MCQ lesson's primary resource or in a lesson's related resources. The student base path is `/api/v1/courses/:courseId/lessons/:lessonId/quizzes/:quizId`. Every route below checks the current enrollment, lesson availability, and link.
+
+| Method and suffix | Behavior |
+| --- | --- |
+| GET base path | Tutor quiz title, latest published revision, question count and any open attempt ID |
+| POST /attempts | Send a fresh UUID in `id`. Reuse it on retry. One student has one open attempt per quiz across all eligible links. If another attempt is open, fetch the base path to resume it. |
+| GET /attempts/:attemptId | Resume the signed-in student's pinned revision. Unanswered items show stems and options. After final submission, review includes omitted items. |
+| PUT /attempts/:attemptId/answers/:questionId | Send `optionId` to commit the answer and reveal that item's key and explanation. Retrying the same answer is safe. Changing a committed answer returns 409. |
+| POST /attempts/:attemptId/submit | Finalize the unranked attempt, record unanswered items as omitted, and return correct, incorrect, omitted and total counts. Safe to retry. |
+| GET /coverage | Current quiz's unique used count and per-question latest correctness and omission status across the student's individual lesson quizzes |
+
+Option selection stays local until the student commits. A correct answer earns one point, and incorrect or omitted answers earn zero. A later publication applies to new attempts. A repeat answer updates current correctness and clears omission status while preserving history. Quiz actions preserve the parent lesson's saved video timestamp, reading position and completion state. Reopen the original lesson when leaving practice.
+
+`GET /api/v1/me/quiz-results` returns the student's historical result summaries, including after enrollment expiry. Reading question text or explanations still requires an eligible lesson. Apply migrations and reapply `backend/curriculum-grants.sql` for the new runtime permissions.

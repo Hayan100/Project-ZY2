@@ -1,6 +1,6 @@
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
-import { fail, type sessionTransaction } from "./authorized.ts";
+import { fail, type Academic, type sessionTransaction } from "./authorized.ts";
 import { loadCourse } from "./learning.ts";
 
 type Page = { id: string; title: string; blocks: { type: "paragraph" | "heading"; text: string }[] };
@@ -8,7 +8,6 @@ type Manuscript = { title: string; exam: string; subject: string; pages: Page[] 
 type Book = { Params: { id: string } };
 type Reader = Book & { Querystring: { courseId?: string; lessonId?: string } };
 type PageRoute = Reader & { Params: { id:string; pageId:string } };
-type Academic = <T>(req: FastifyRequest, work: (tx: PoolClient, user: string) => Promise<T>) => Promise<T>;
 
 const uuid = {type:"string", format:"uuid", pattern:"^[0-9a-f-]+$"};
 const revision = {type:"integer", minimum:1, maximum:2147483647};
