@@ -119,3 +119,21 @@ Academic staff can set an optional ISO timestamp with a timezone in `releaseAt` 
 Send the `revision` and `version` returned by opening the lesson, along with `completed` and `position`. A video position accepts integer `videoSeconds`, an article position accepts a stable `pageId`, and any lesson accepts an empty position. A 409 means another save or publication won the race. Reopen the lesson before reconciling changes. Completion persists when a student revisits a lesson. Reordering retains progress. Replacing the underlying resource or changing its type starts separate progress. Self-reported completion records study activity only. It grants no quiz score, replay qualification or flashcard scheduling credit.
 
 Apply migrations and reapply `backend/curriculum-grants.sql` before starting the updated API.
+
+## Ebook authoring and reading
+
+Academic staff use `/api/v1/staff/ebooks`. POST a book UUID, an optional fixed `libraryProductKey`, and a `manuscript` to create revision 1. The manuscript contains a title, exam, subject, and ordered pages. Each page has a stable lowercase UUID, a title, and an ordered `blocks` array. Each block has a `type` of `heading` or `paragraph` and a plain-text `text` field. Clients render these as responsive headings and paragraphs using text nodes.
+
+GET the collection to list books. GET `/:id` to preview the latest manuscript, optionally supplying `?revision=N` for an earlier revision. PUT `/:id` with the current revision and complete manuscript to save an edit. POST `/:id/publish` with the reviewed revision to release it. Each published page requires at least one block. Keep existing page IDs when correcting or reordering pages.
+
+| Student route | Behavior |
+| --- | --- |
+| GET /api/v1/ebooks | My Books for active library products. Optional `q` matches title, exam or subject. Summaries include the last visited current page and separate visited/studied counts. |
+| GET /api/v1/ebooks/:id | Current published table of contents, reading indicators and resume page |
+| GET /api/v1/ebooks/:id/pages/:pageId | Read a published page by stable ID |
+| GET /api/v1/ebooks/:id/search?q=term | Search current page titles and authored text, returning matching page IDs and titles |
+| PUT /api/v1/ebooks/:id/pages/:pageId/reading | Record a visit with the current ebook `revision`. Optionally set `studied` to true or false. A stale publication returns 409. |
+
+Inside Academy, append both `courseId` and `lessonId` query parameters to reader, search and reading-progress requests. The published, available lesson must reference that book as its HTML article or a related resource. Without lesson context, reads require an active enrollment for the book's library product. Both paths use the same student/book/page reading record. Course-only books can omit the library product key. Marking a page studied does not complete a lesson.
+
+Apply migrations and reapply `backend/curriculum-grants.sql` to install the ebook runtime permissions.

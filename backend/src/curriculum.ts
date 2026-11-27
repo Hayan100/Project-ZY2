@@ -1,3 +1,4 @@
+import { registerEbooks } from "./ebooks.ts";
 import { registerLearning, validatePrerequisites } from "./learning.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool, PoolClient } from "pg";
@@ -92,4 +93,5 @@ export function registerCurriculum(app: FastifyInstance, db: Pool, principal: Id
   app.get("/api/v1/courses", req => session(req, async (tx, actor) => ({ courses: (await tx.query(
     `SELECT c.id,r.revision,r.outline->>'title' AS title ${accessible} ORDER BY title,c.id`, [actor.id])).rows })));
   registerLearning(app, session, accessible);
+  registerEbooks(app, session, academic, accessible);
 }
