@@ -121,7 +121,9 @@ test("academic revisions publish atomically and follow current enrollment", { sk
   assert.equal((await request("GET",campaigns+"/"+campaignId+"/preview",author)).json().eligible>=1,true);
   assert.equal((await request("PUT",campaigns+"/"+campaignId+"/approval",author)).statusCode,403);
   assert.equal((await request("PUT",campaigns+"/"+campaignId+"/approval",approver)).statusCode,200);
-  const mail=await runtime.connect();
+  const campaignWorker = new Pool({connectionString, options:"-c role=zy2_campaign"});
+  t.after(() => campaignWorker.end());
+  const mail=await campaignWorker.connect();
   try {
     await consent(false);
     assert.equal(await sendCampaignStep(mail,campaignId,student,0,async()=>assert.fail()),false);

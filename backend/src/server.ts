@@ -8,7 +8,7 @@ const db = new Pool({ connectionString: url, max: 8, connectionTimeoutMillis: 30
 const app = buildApi(async () => {
   const result = await db.query<Program>("SELECT code, name FROM public.public_programs ORDER BY code");
   return result.rows;
-}, true);
+}, true, () => db.query("SELECT code FROM public.public_programs LIMIT 0"));
 registerIdentity(app, db, process.env.AUTH_ORIGIN ?? "", process.env.AUTH_SECRET ?? "", mailer());
 db.on("error", () => app.log.error("Idle PostgreSQL connection failed"));
 app.addHook("onClose", () => db.end());

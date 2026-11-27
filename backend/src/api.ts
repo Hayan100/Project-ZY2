@@ -4,7 +4,7 @@ import { LRUCache } from "lru-cache";
 
 export type Program = { code: string; name: string };
 
-export function buildApi(readPublished: () => Promise<Program[]>, logger = false) {
+export function buildApi(readPublished: () => Promise<Program[]>, logger = false, checkDatabase: () => Promise<unknown> = readPublished) {
   const app = Fastify({
     logger: logger && { serializers: { req: (req: { method: string }) => ({ method: req.method }) } },
     bodyLimit: 16_384, requestTimeout: 60_000, trustProxy: false,
@@ -22,6 +22,10 @@ export function buildApi(readPublished: () => Promise<Program[]>, logger = false
     reply.header("Cache-Control", "no-store");
   });
   app.get("/health/live", async () => ({ status: "ok" }));
+  app.get("/health/ready", async () => {
+    await checkDatabase();
+    return { status: "ready" };
+  });
   app.get("/api/v1/programs", async (_request, reply) => {
     const programs = await catalog.fetch("public");
     // Downstream caches revalidate so their TTL cannot extend the publishing delay.

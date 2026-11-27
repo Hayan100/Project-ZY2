@@ -2,6 +2,22 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildApi } from "../src/api.ts";
 
+test("readiness checks the database on each probe while liveness stays independent", async t => {
+  let available = false;
+  const app = buildApi(async () => [], false, async () => {
+    if (!available) throw new Error("private connection failure");
+  });
+  t.after(() => app.close());
+  const failed = await app.inject("/health/ready");
+  assert.equal(failed.statusCode, 503);
+  assert.deepEqual(failed.json(), { error: "Service unavailable" });
+  assert.equal((await app.inject("/health/live")).statusCode, 200);
+  available = true;
+  const ready = await app.inject("/health/ready");
+  assert.deepEqual(ready.json(), { status: "ready" });
+  assert.equal(ready.headers["cache-control"], "no-store");
+});
+
 test("catalog coalesces concurrent reads, retries failures and skips DB on cache hits", async (t) => {
   let calls = 0;
   const programs = [{ code: "mdcat", name: "MDCAT" }];

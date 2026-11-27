@@ -21,6 +21,7 @@ Start with the limited runtime connection in `DATABASE_URL`. Set `AUTH_ORIGIN` t
 | Route | Behavior |
 | --- | --- |
 | GET /health/live | Process liveness |
+| GET /health/ready | Fresh database check under the API login. Returns 503 when the catalog cannot be queried |
 | GET /api/v1/programs | Public catalog, cached 60 seconds per process with concurrent misses coalesced |
 | POST /api/auth/sign-up/email | Student self-registration with name, email and password. Verification email sent |
 | GET /api/auth/verify-email | Follow the emailed verification link |
@@ -33,7 +34,15 @@ Start with the limited runtime connection in `DATABASE_URL`. Set `AUTH_ORIGIN` t
 
 Use same-origin JSON requests and the HTTP-only session cookie. Access checks read current PostgreSQL state and return no-store responses. Staff use the same login and receive no automatic product access. Only an authorized enrollment workflow should issue a grant, scoped to the purchased product and effective dates. Payment evidence, unpaid orders and account creation alone grant nothing. Future protected content handlers must enforce authorization server-side for the actual resource.
 
-## Operator-created accounts
+## Deploying the backend
+
+From `backend/`, build the runtime image with `docker build -t zy2-api:<release> .`. Its default command starts the API on port 3000. Route HTTPS traffic through the deployment's reverse proxy and use `/health/ready` to decide when to send traffic. Use `/health/live` for process checks.
+
+Before starting a release, run `npm ci` and `npm run migrate` from the matching backend checkout with the migration-owner connection. Provision the API and delivery logins as described here, plus separate `zy2_campaign` and `zy2_youtube` logins for those workers. As owner, apply `payment-grants.sql`, `curriculum-grants.sql`, `delivery-grants.sql` and `scheduled-worker-grants.sql` using psql with `-v ON_ERROR_STOP=1`. Set login passwords through the deployment secret store or psql's interactive password prompt.
+
+Use the same image for each process, injecting only its database login and provider settings. Run `node src/receipt-worker.ts` continuously. Schedule `node src/campaign-worker.ts` and `node src/youtube-worker.ts` as recurring jobs and alert on unsuccessful exits. The provider settings and delivery semantics are in the payment sections below and the [backend workflow guide](docs/backend-workflows.md).
+
+## Operator-created accounts and temporary passwords
 
 With an authorized operator database connection and a verified destination address, run `node src/provision.ts --email student@example.org --name "Student Name"`. Add `--staff` only for authorized staff. The command emails a random temporary password, valid for 24 hours. A first login is restricted to account status and replacing the password. An existing email causes provisioning to fail. There is no public role assignment endpoint.
 

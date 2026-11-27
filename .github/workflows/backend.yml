@@ -30,3 +30,12 @@ jobs:
       - run: npm run migrate
       - run: psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f test/bootstrap.sql
       - run: npm test
+      - name: Build runtime image and check API readiness
+        run: |
+          docker build -t zy2-api:test .
+          docker run -d --name zy2-api --network host \
+            -e DATABASE_URL -e PGOPTIONS="-c role=zy2_api" \
+            -e AUTH_ORIGIN=https://academy.example.org -e AUTH_SECRET="$(openssl rand -hex 32)" \
+            -e SMTP_URL=smtps://localhost -e MAIL_FROM=test@example.org zy2-api:test
+          trap 'docker logs zy2-api; docker rm -f zy2-api' EXIT
+          curl --retry 15 --retry-connrefused --retry-delay 1 --fail http://localhost:3000/health/ready
