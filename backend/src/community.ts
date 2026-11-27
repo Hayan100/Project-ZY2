@@ -2,7 +2,7 @@ import type {FastifyInstance} from "fastify";
 import type {PoolClient} from "pg";
 import {fail,type sessionTransaction} from "./authorized.ts";
 import {loadCourse} from "./learning.ts";
-import {registerLibrary} from "./virtual-library.ts";
+import {createHash} from "node:crypto";
 
 export const uuid={type:"string",format:"uuid"};
 export const label=(maxLength:number)=>({type:"string",pattern:"\\S",maxLength});
@@ -36,6 +36,12 @@ async function stoat(channel:string,id?:string,input?:{id:string;text:string}) {
   const message=await response.json() as {_id:string;content:string;channel:string};
   if(message.channel!==channel || typeof message.content!=="string" || typeof message._id!=="string" || (id && message._id!==id)) fail(502);
   return message;
+}
+
+type PostRow = {id:string;created:Date;remote_id:string|null;stoat_channel:string|null;body:string|null};
+async function hydratePosts(rows: PostRow[]) {
+  return Promise.all(rows.map(async ({remote_id,stoat_channel,...post}) => ({...post,
+    body:remote_id && stoat_channel ? (await stoat(stoat_channel,remote_id)).content : post.body})));
 }
 
 export function registerCommunity(app:FastifyInstance,session:Session,accessible:string) {
@@ -84,24 +90,27 @@ export function registerCommunity(app:FastifyInstance,session:Session,accessible
     if(await blocked(tx,r.sender,r.recipient)) fail(404);
   }
   async function posts(tx:PoolClient,scope:string,id:string,user:string,search?:string,before?:string) {
-    const rows=(await tx.query(`SELECT p.id,p.author,p.body,p.remote_id,p.created,p.parent,p.verified_by,s.stoat_channel FROM community_posts p
+    const rows=(await tx.query<PostRow>(`SELECT p.id,p.author,p.body,p.remote_id,p.created,p.parent,p.verified_by,s.stoat_channel FROM community_posts p
       LEFT JOIN shared_spaces s ON s.id=p.space WHERE p.${scope}=$1 AND NOT p.removed AND
       (s.kind IS DISTINCT FROM 'resources' OR p.id IN (SELECT id FROM published_resource_posts)) AND
       NOT EXISTS(SELECT FROM community_blocks WHERE (actor,peer) IN (($2,p.author),(p.author,$2))) AND
       ($3::text IS NULL OR strpos(lower(p.body),lower($3))>0) AND ($4::uuid IS NULL OR (p.created,p.id)<
       (SELECT created,id FROM community_posts WHERE id=$4 AND ${scope}=$1)) ORDER BY p.created DESC,p.id DESC LIMIT 30`,[id,user,search,before])).rows;
-    return Promise.all(rows.map(async({remote_id,stoat_channel,...p})=>({...p,body:remote_id?(await stoat(stoat_channel,remote_id)).content:p.body})));
+    return rows;
   }
-  app.get(root,req=>session(req,async(tx,a)=>{
-    const channels=(await visible(tx,a.id)).map(({stoat_channel,...s})=>s);
-    const families=(await tx.query("SELECT f.id,f.name FROM families f JOIN family_members m ON m.family_id=f.id WHERE m.user_id=$1",[a.id])).rows;
-    const mentors=(await tx.query("SELECT id,mentor_id FROM welcome_enrollments WHERE user_id=$1 AND mentor_id IS NOT NULL",[a.id])).rows;
-    const announcements=[];
-    for(const c of channels.filter(c=>c.kind==="announcements")) announcements.push(...await posts(tx,"space",c.id,a.id));
-    return {announcements:announcements.sort((a,b)=>b.created-a.created).slice(0,30),followed:channels.filter(c=>c.followed),channels,families,
-      familyEligibility:families.length?null:"An active family-enabled enrollment and Ghazi assignment are required.",library:"/api/v1/library",mentors:mentors.map(m=>"/api/v1/onboarding/"+m.id+"/messages"),
-      featureBoard:"/api/v1/feature-suggestions",help:"/api/v1/support/help",support:process.env.COMMUNITY_SUPPORT_URL??"/api/v1/support/tickets"};
-  }));
+  app.get(root,async req=>{
+    const home=await session(req,async(tx,a)=>{
+      const channels=(await visible(tx,a.id)).map(({stoat_channel,...s})=>s);
+      const families=(await tx.query("SELECT f.id,f.name FROM families f JOIN family_members m ON m.family_id=f.id WHERE m.user_id=$1",[a.id])).rows;
+      const mentors=(await tx.query("SELECT id,mentor_id FROM welcome_enrollments WHERE user_id=$1 AND mentor_id IS NOT NULL",[a.id])).rows;
+      const announcements=[];
+      for(const c of channels.filter(c=>c.kind==="announcements")) announcements.push(...await posts(tx,"space",c.id,a.id));
+      return {announcements:announcements.sort((a,b)=>b.created.getTime()-a.created.getTime()).slice(0,30),followed:channels.filter(c=>c.followed),channels,families,
+        familyEligibility:families.length?null:"An active family-enabled enrollment and Ghazi assignment are required.",library:"/api/v1/library",mentors:mentors.map(m=>"/api/v1/onboarding/"+m.id+"/messages"),
+        featureBoard:"/api/v1/feature-suggestions",help:"/api/v1/support/help",support:process.env.COMMUNITY_SUPPORT_URL??"/api/v1/support/tickets"};
+    });
+    return {...home,announcements:await hydratePosts(home.announcements)};
+  });
   app.put<Path & {Body:{follow:boolean}}>(channel+"/follow",{schema:{params,body:obj({follow:{type:"boolean"}})}},req=>session(req,async(tx,a)=>{
     const id=req.params.id;await getChannel(tx,a.id,id);
     if(req.body.follow) await tx.query("INSERT INTO space_follows VALUES($1,$2) ON CONFLICT DO NOTHING",[id,a.id]);
@@ -110,30 +119,49 @@ export function registerCommunity(app:FastifyInstance,session:Session,accessible
   }));
   const dm=root+"/dms/:id";
   for(const [url,scope] of [[channel,"space"],[dm,"dm"]] as const) {
-    app.get<Path & {Querystring:{q?:string;before?:string}}>(url+"/posts",{schema:{params,querystring:obj({q:label(150),before:uuid},[])}},req=>session(req,async(tx,a)=>{
-      const id=req.params.id;
-      if(scope==="space") await getChannel(tx,a.id,id); else await peer(tx,a.id,id);
-      return {posts:await posts(tx,scope,id,a.id,req.query.q,req.query.before)};
-    }));
-    app.post<Path & {Body:{id:string;text:string;parent?:string}}>(url+"/posts",{schema:{params,body:obj({id:uuid,text:label(2000),parent:uuid},["id","text"])}},req=>session(req,async(tx,a)=>{
-      const id=req.params.id,b=req.body;
-      await allowed(tx,a.id,true);
-      const c=scope==="space"?await getChannel(tx,a.id,id):null;
-      if(scope==="dm") await peer(tx,a.id,id);
-      if(c?.kind==="announcements") await moderator(tx,a.id);
-      if(c?.kind==="resources" && b.parent && !(await tx.query("SELECT FROM published_resource_posts WHERE id=$1",[b.parent])).rowCount) fail(404);
-      if(b.parent && !(await tx.query(`SELECT FROM community_posts WHERE id=$1 AND ${scope}=$2 AND NOT removed AND parent IS NULL`,[b.parent,id])).rowCount) fail(404);
-      await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1,41))",[b.id]);
-      const old=(await tx.query(`SELECT author,${scope} AS destination,body,parent FROM community_posts WHERE id=$1`,[b.id])).rows[0];
-      if(old){
-        if(old.author!==a.id || old.destination!==id || (c?.kind==="resources" && (old.body!==b.text || old.parent!==(b.parent??null)))) fail(409);
-        return {id:b.id};
-      }
-      if(c && ["general","media"].includes(c.kind) && !c.stoat_channel) fail(503);
-      const remote=c?.stoat_channel?await stoat(c.stoat_channel,undefined,b):null;
-      await tx.query(`INSERT INTO community_posts(id,${scope},author,body,remote_id,parent) VALUES($1,$2,$3,$4,$5,$6)`,[b.id,id,a.id,remote?null:b.text,remote?._id,b.parent]);
-      return {id:b.id};
-    }));
+    app.get<Path & {Querystring:{q?:string;before?:string}}>(url+"/posts",{schema:{params,querystring:obj({q:label(150),before:uuid},[])}},async req=>{
+      const readVisible=()=>session(req,async(tx,a)=>{
+        const id=req.params.id;
+        if(scope==="space") await getChannel(tx,a.id,id); else await peer(tx,a.id,id);
+        return posts(tx,scope,id,a.id,req.query.q,req.query.before);
+      });
+      const rows=await readVisible();
+      const hydrated=await hydratePosts(rows);
+      if(!rows.some(post=>post.remote_id)) return {posts:hydrated};
+      const current=new Set((await readVisible()).map(post=>post.id));
+      return {posts:hydrated.filter(post=>current.has(post.id))};
+    });
+    app.post<Path & {Body:{id:string;text:string;parent?:string}}>(url+"/posts",{schema:{params,body:obj({id:uuid,text:label(2000),parent:uuid},["id","text"])}},async req=>{
+      const prepareOrPersist=(remote?:{channel:string;id:string})=>session(req,async(tx,actor)=>{
+        const id=req.params.id, input=req.body;
+        const digest=createHash("sha256").update(JSON.stringify([actor.id,scope,id,input.parent??null,input.text])).digest("hex");
+        await allowed(tx,actor.id,true);
+        const channelInfo=scope==="space"?await getChannel(tx,actor.id,id):null;
+        if(scope==="dm") await peer(tx,actor.id,id);
+        if(channelInfo?.kind==="announcements") await moderator(tx,actor.id);
+        if(channelInfo?.kind==="resources" && input.parent && !(await tx.query("SELECT FROM published_resource_posts WHERE id=$1",[input.parent])).rowCount) fail(404);
+        if(input.parent && !(await tx.query(`SELECT FROM community_posts WHERE id=$1 AND ${scope}=$2 AND NOT removed AND parent IS NULL`,[input.parent,id])).rowCount) fail(404);
+        await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1,41))",[input.id]);
+        const old=(await tx.query(`SELECT author,${scope} AS destination,body,parent,(SELECT digest FROM stoat_sends WHERE id=$1) AS digest FROM community_posts WHERE id=$1`,[input.id])).rows[0];
+        if(old){
+          if((old.digest && old.digest!==digest) || old.author!==actor.id || old.destination!==id || (channelInfo?.kind==="resources" && (old.body!==input.text || old.parent!==(input.parent??null)))) fail(409);
+          return {id:input.id};
+        }
+        if(channelInfo && ["general","media"].includes(channelInfo.kind) && !channelInfo.stoat_channel) fail(503);
+        if(channelInfo?.stoat_channel) {
+          await tx.query("INSERT INTO stoat_sends(id,digest) VALUES($1,$2) ON CONFLICT DO NOTHING",[input.id,digest]);
+          if(!(await tx.query("SELECT FROM stoat_sends WHERE id=$1 AND digest=$2",[input.id,digest])).rowCount) fail(409);
+          if(!remote) return {channel:String(channelInfo.stoat_channel)};
+          if(remote.channel!==channelInfo.stoat_channel) fail(409);
+        } else if((await tx.query("SELECT FROM stoat_sends WHERE id=$1",[input.id])).rowCount) fail(409);
+        await tx.query(`INSERT INTO community_posts(id,${scope},author,body,remote_id,parent) VALUES($1,$2,$3,$4,$5,$6)`,[input.id,id,actor.id,remote?null:input.text,remote?.id,input.parent]);
+        return {id:input.id};
+      });
+      const prepared=await prepareOrPersist();
+      if(!prepared.channel) return prepared;
+      const message=await stoat(prepared.channel,undefined,req.body);
+      return prepareOrPersist({channel:prepared.channel,id:message._id});
+    });
   }
   app.post<{Body:{peer:string}}>(root+"/dms",{schema:{body:obj({peer:label(200)})}},req=>session(req,async(tx,a)=>{
     const other=req.body.peer;await allowed(tx,a.id,true);
@@ -179,7 +207,6 @@ export function registerCommunity(app:FastifyInstance,session:Session,accessible
       [req.params.post,c.id,a.id])).rows[0]??fail(404);
   }));
   registerResourceReviews(app,session);
-  registerLibrary(app,session,accessible);
   return visible;
 }
 
@@ -235,11 +262,16 @@ function registerModeration(app:FastifyInstance,session:Session,channel:Access,d
     await moderator(tx,a.id);
     return {reports:(await tx.query("SELECT r.*,p.body,p.remote_id,s.stoat_channel,to_jsonb(ac) AS action FROM community_reports r LEFT JOIN community_posts p ON p.id=r.post LEFT JOIN shared_spaces s ON s.id=p.space LEFT JOIN community_actions ac ON ac.report=r.id ORDER BY r.created DESC LIMIT 100")).rows};
   }));
-  app.get<Path>(staff+"/reports/:id/evidence",{schema:{params}},req=>session(req,async(tx,a)=>{
-    await moderator(tx,a.id);
-    const p=(await tx.query("SELECT p.body,p.remote_id,s.stoat_channel FROM community_reports r JOIN community_posts p ON p.id=r.post LEFT JOIN shared_spaces s ON s.id=p.space WHERE r.id=$1",[req.params.id])).rows[0]??fail(404);
-    return {body:p.remote_id?(await stoat(p.stoat_channel,p.remote_id)).content:p.body};
-  }));
+  app.get<Path>(staff+"/reports/:id/evidence",{schema:{params}},async req=>{
+    const p=await session(req,async(tx,a)=>{
+      await moderator(tx,a.id);
+      return (await tx.query("SELECT p.body,p.remote_id,s.stoat_channel FROM community_reports r JOIN community_posts p ON p.id=r.post LEFT JOIN shared_spaces s ON s.id=p.space WHERE r.id=$1",[req.params.id])).rows[0]??fail(404);
+    });
+    if(!p.remote_id) return {body:p.body};
+    const message=await stoat(p.stoat_channel,p.remote_id);
+    await session(req,(tx,actor)=>moderator(tx,actor.id));
+    return {body:message.content};
+  });
   app.post<Path & {Body:{kind:string;reason:string;hours?:number}}>(staff+"/reports/:id/action",{schema:{params,body:obj({
     kind:{enum:["dismiss","warn","remove","mute","restrict"]},reason:label(2000),hours:{type:"integer",minimum:1,maximum:720}},["kind","reason"])}},req=>session(req,async(tx,a)=>{
     await moderator(tx,a.id);const b=req.body;

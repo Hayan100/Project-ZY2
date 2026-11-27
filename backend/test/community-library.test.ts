@@ -4,7 +4,7 @@ import {randomUUID} from "node:crypto";
 import {createServer} from "node:http";
 import {Pool} from "pg";
 import {buildApi} from "../src/api.ts";
-import {registerCurriculum} from "../src/curriculum.ts";
+import {registerRoutes} from "../src/router.ts";
 
 test("Community gates Stoat, academic discussions, consent and appeals; library seats survive view switches",{skip:!process.env.TEST_DATABASE_URL},async t=>{
   const cs=process.env.TEST_DATABASE_URL,db=new Pool({connectionString:cs}),runtime=new Pool({connectionString:cs,options:"-c role=zy2_api"});
@@ -19,18 +19,21 @@ test("Community gates Stoat, academic discussions, consent and appeals; library 
     await db.query("INSERT INTO staff_members VALUES($1)",[id]);await db.query("INSERT INTO community_moderators VALUES($1)",[id]);
   }
   await db.query("INSERT INTO academic_staff VALUES($1)",[reviewer]);await db.query("INSERT INTO doubt_staff VALUES($1,'Physics')",[reviewer]);
-  registerCurriculum(app,runtime,async cookie=>cookie?{user:{id:cookie,emailVerified:true},session:{id:cookie}}:null,"http://localhost");
+  registerRoutes(app,runtime,async cookie=>cookie?{user:{id:cookie,emailVerified:true},session:{id:cookie}}:null,"http://localhost");
   async function call(method:"POST"|"GET"|"PUT"|"DELETE",url:string,user:string,payload?:object,status=200){
     const res=await app.inject({method,url:"/api/v1/"+url,headers:{cookie:user},payload});
     assert.equal(res.statusCode,status,url+" "+res.body);return res.json();
   }
   const product=randomUUID(),paid=randomUUID(),subject=randomUUID(),quiet=randomUUID(),social=randomUUID(),channel="0123456789ABCDEFGHJKMNPQRS";
+  let revokeDuringSend=false;
   const api=createServer(async(req,res)=>{
+    assert.equal(runtime.totalCount-runtime.idleCount,0,"Stoat HTTP must run after releasing the runtime connection");
     assert.equal(req.headers["x-bot-token"],"test-only");
     assert.ok(req.url?.startsWith("/channels/"+channel+"/messages"));
     if(req.method==="POST"){
       let raw="";for await(const part of req) raw+=part;
       assert.equal(JSON.parse(raw).content,"Hello classmates");assert.ok(req.headers["idempotency-key"]);
+      if(revokeDuringSend) await db.query("UPDATE enrollments SET revoked_at=now() WHERE user_id=$1",[a]);
     }
     res.writeHead(200,{"Content-Type":"application/json"});res.end(JSON.stringify({_id:"message1",channel,content:"Hello classmates"}));
   });
@@ -64,6 +67,7 @@ test("Community gates Stoat, academic discussions, consent and appeals; library 
   await call("PUT",savePost,b,{saved:true},404);
   await Promise.all([call("PUT",savePost,a,{saved:true}),call("PUT",savePost,a,{saved:true})]);
   assert.deepEqual((await call("GET","inventory",a)).community,[{id:submission,space:resources,body:worksheet.text}]);
+  assert.equal((await call("GET","me/saved",a)).items[0].target,submission);
   assert.deepEqual((await call("GET","inventory",b)).community,[]);
   await db.query("UPDATE enrollments SET revoked_at=now() WHERE user_id=$1",[a]);
   assert.deepEqual((await call("GET","inventory",a)).community,[]);
@@ -83,6 +87,14 @@ test("Community gates Stoat, academic discussions, consent and appeals; library 
   assert.deepEqual((await call("GET",feed,a)).posts,[]);
   assert.equal((await call("GET",resourceChannel+"/submissions/"+submission,a)).status,"declined");
   await call("POST",chat+"/posts",a,{id:post,text:"Hello classmates"});
+  const changed=await call("POST",chat+"/posts",a,{id:post,text:"Changed"},409);
+  assert.equal(changed.code,"conflict");
+  revokeDuringSend=true;
+  const interrupted=randomUUID();
+  await call("POST",chat+"/posts",a,{id:interrupted,text:"Hello classmates"},404);
+  assert.equal((await db.query("SELECT FROM community_posts WHERE id=$1",[interrupted])).rowCount,0);
+  revokeDuringSend=false;
+  await db.query("UPDATE enrollments SET revoked_at=NULL WHERE user_id=$1",[a]);
   await call("PUT",chat+"/follow",a,{follow:true});
   assert.equal((await call("GET",chat+"/posts",a)).posts[0].body,"Hello classmates");
   assert.equal((await call("GET","community",a)).followed.length,1);

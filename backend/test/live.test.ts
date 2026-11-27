@@ -3,7 +3,7 @@ import test from "node:test";
 import {randomUUID} from "node:crypto";
 import {Pool} from "pg";
 import {buildApi} from "../src/api.ts";
-import {registerCurriculum} from "../src/curriculum.ts";
+import {registerRoutes} from "../src/router.ts";
 
 test("live duels and family battles seal keys, fence answer control and score on the server",{skip:!process.env.TEST_DATABASE_URL},async t=>{
   const connectionString=process.env.TEST_DATABASE_URL,db=new Pool({connectionString}),runtime=new Pool({connectionString,options:"-c role=zy2_api"});
@@ -30,7 +30,7 @@ test("live duels and family battles seal keys, fence answer control and score on
     await db.query("INSERT INTO ghazi_assignments(enrollment_id,version,mentor_id,assigned_by) VALUES($1,1,$2,$3)",[en,first?g1:g2,staff]);
     await db.query("INSERT INTO family_entries(event_id,user_id,family_id) VALUES($1,$2,$3)",[event,id,first?home:away]);
   }
-  registerCurriculum(app,runtime,async cookie=>cookie?{user:{id:cookie,emailVerified:true},session:{id:cookie}}:null,"http://localhost");
+  registerRoutes(app,runtime,async cookie=>cookie?{user:{id:cookie,emailVerified:true},session:{id:cookie}}:null,"http://localhost");
   async function call(method:"GET"|"PUT"|"POST",path:string,user:string,payload?:object,status=200) {
     const res=await app.inject({method,url:"/api/v1/"+path,headers:{cookie:user},payload});
     assert.equal(res.statusCode,status,path+" "+res.body);

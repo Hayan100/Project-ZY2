@@ -1,18 +1,7 @@
-import { registerCommunity } from "./community.ts";
-import { registerInventory } from "./inventory.ts";
-import { registerSupport } from "./support.ts";
-import { registerFeatureBoard } from "./feature-board.ts";
-import { registerLive } from "./live.ts";
-import { registerFamilies } from "./family.ts";
-import { registerWelcome } from "./welcome.ts";
-import { registerPlanner } from "./planner.ts";
-import { registerFlashcards } from "./flashcards.ts";
-import { registerQuizzes } from "./quizzes.ts";
-import { registerEbooks } from "./ebooks.ts";
-import { registerLearning, validatePrerequisites } from "./learning.ts";
-import type { FastifyInstance, FastifyRequest } from "fastify";
-import type { Pool, PoolClient } from "pg";
-import { fail, sessionTransaction, type Identity } from "./authorized.ts";
+import { validatePrerequisites } from "./learning.ts";
+import type { FastifyInstance } from "fastify";
+import type { PoolClient } from "pg";
+import { fail,type Academic,type sessionTransaction } from "./authorized.ts";
 
 export type Lesson = { estimatedMinutes?:number; id: string; title: string; type: string; resourceId?: string; relatedResourceIds?: string[]; releaseAt?: string; prerequisiteIds?: string[] };
 export type Outline = {
@@ -43,15 +32,8 @@ async function saveRevision(tx: PoolClient, id: string, version: number, outline
   return { id, revision: version };
 }
 
-export function registerCurriculum(app: FastifyInstance, db: Pool, principal: Identity, origin: string) {
-  const session = sessionTransaction(db, principal, origin);
+export function registerCourses(app: FastifyInstance, session: ReturnType<typeof sessionTransaction>, academic: Academic, accessible: string) {
   const staff = "/api/v1/staff/courses";
-  function academic<T>(req: FastifyRequest, work: (tx: PoolClient, author: string) => Promise<T>) {
-    return session(req, async (tx, actor) => {
-      if (!(await tx.query("SELECT FROM academic_staff WHERE user_id=$1", [actor.id])).rowCount) fail(403);
-      return work(tx, actor.id);
-    });
-  }
   app.get(staff, req => academic(req, async tx => ({ courses: (await tx.query(`
     SELECT c.id,c.product_key AS "productKey",c.revision,c.published_revision AS "publishedRevision",r.outline->>'title' AS title
     FROM courses c JOIN course_revisions r ON (c.id,c.revision)=(r.course_id,r.revision) ORDER BY title,c.id`)).rows })));
@@ -97,21 +79,6 @@ export function registerCurriculum(app: FastifyInstance, db: Pool, principal: Id
     }
     return { id, publishedRevision: version };
   }));
-  const accessible = `FROM courses c JOIN course_revisions r ON (c.id,c.published_revision)=(r.course_id,r.revision)
-    WHERE EXISTS (SELECT FROM enrollments e WHERE e.user_id=$1 AND e.product_key=c.product_key
-      AND e.revoked_at IS NULL AND e.starts_at<=now() AND now()<e.ends_at)`;
   app.get("/api/v1/courses", req => session(req, async (tx, actor) => ({ courses: (await tx.query(
     `SELECT c.id,r.revision,r.outline->>'title' AS title ${accessible} ORDER BY title,c.id`, [actor.id])).rows })));
-  registerLearning(app, session, accessible);
-  registerEbooks(app, session, academic, accessible);
-  registerQuizzes(app, session, academic, accessible);
-  const revisionSummary=registerFlashcards(app, session, academic, accessible);
-  registerWelcome(app,session,revisionSummary);
-  registerFamilies(app,session);
-  registerLive(app,session,academic);
-  const visibleChannels=registerCommunity(app,session,accessible);
-  registerInventory(app,session,academic,accessible,visibleChannels);
-  registerSupport(app,session);
-  registerFeatureBoard(app,session);
-  registerPlanner(app,session,academic,accessible,revisionSummary);
 }

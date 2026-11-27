@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { Pool } from "pg";
 import { buildApi } from "../src/api.ts";
-import { registerCurriculum } from "../src/curriculum.ts";
+import { registerRoutes } from "../src/router.ts";
 
 test("private tickets retain history and restrict complaint and escalation queues", {skip: !process.env.TEST_DATABASE_URL}, async t => {
   const connectionString = process.env.TEST_DATABASE_URL;
@@ -20,7 +20,7 @@ test("private tickets retain history and restrict complaint and escalation queue
   for (const id of [reviewer, senior, reported]) await db.query("INSERT INTO staff_members VALUES($1)", [id]);
   await db.query(`INSERT INTO support_reviewers VALUES ($1,'technical',false),($2,'technical',true),
     ($2,'service_complaint',true),($3,'service_complaint',true)`, [reviewer,senior,reported]);
-  registerCurriculum(app,runtime,async cookie => cookie ? {user:{id:cookie,emailVerified:true},session:{id:cookie}} : null,"http://localhost");
+  registerRoutes(app,runtime,async cookie => cookie ? {user:{id:cookie,emailVerified:true},session:{id:cookie}} : null,"http://localhost");
   async function call(cookie:string, path:string, payload?:object, status=200) {
     const res = await app.inject({method:payload ? "POST" : "GET", url:"/api/v1/"+path, headers:{cookie}, payload});
     assert.equal(res.statusCode,status,path+" "+res.body);

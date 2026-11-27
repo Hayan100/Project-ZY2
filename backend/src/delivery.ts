@@ -30,20 +30,26 @@ export async function deliverNext(db: Pool, dispatch: Dispatch) {
         await tx.query("COMMIT");
         return true;
       }
+      let result:Awaited<ReturnType<Dispatch>>={complete:true};
       try {
-        let result:{complete:boolean;providerId?:string|null}={complete:true};
         if (!(notice.kind==="reminder" && notice.settled)) {
           if (!notice.destination && !notice.provider_id) throw new Error("Missing verified contact");
           result=await dispatch(notice);
         }
-        await tx.query(`UPDATE payment_messages SET attempts=attempts+1,provider_id=$5,
-          accepted_at=CASE WHEN $6 THEN now() END,next_attempt=now()+interval '5 minutes'`+where,
-          [...key,result.providerId??null,result.complete]);
-      } catch {
-        // Preserve a WhatsApp SID if polling fails transiently.
-        await tx.query(`UPDATE payment_messages SET attempts=attempts+1,
-          next_attempt=now()+make_interval(mins=>least(360,1<<least(attempts,9)))`+where,key);
+      } catch (error) {
+        // Keep the provider ID so that a failed poll retries the same message.
+        const retry = await tx.query(`UPDATE payment_messages SET attempts=attempts+1,
+          next_attempt=now()+make_interval(mins=>least(360,1<<least(attempts,9)))`+where+" RETURNING attempts,next_attempt",key);
+        await tx.query("COMMIT");
+        console.error(JSON.stringify({event:"delivery_retry",invoiceId:notice.invoice_id,part:notice.part,
+          kind:notice.kind,channel:notice.channel,phase:notice.provider_id?"poll":"send",
+          reason:!notice.destination && !notice.provider_id?"missing_contact":error instanceof Error && error.name==="TimeoutError"?"timeout":"delivery_failure",
+          attempt:retry.rows[0].attempts,nextAttempt:retry.rows[0].next_attempt}));
+        return true;
       }
+      await tx.query(`UPDATE payment_messages SET attempts=attempts+1,provider_id=$5,
+        accepted_at=CASE WHEN $6 THEN now() END,next_attempt=now()+interval '5 minutes'`+where,
+        [...key,result.providerId??null,result.complete]);
     }
     await tx.query("COMMIT");
     return Boolean(notice);

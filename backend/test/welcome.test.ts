@@ -3,7 +3,7 @@ import test from "node:test";
 import {randomUUID} from "node:crypto";
 import {Pool} from "pg";
 import {buildApi} from "../src/api.ts";
-import {registerCurriculum} from "../src/curriculum.ts";
+import {registerRoutes} from "../src/router.ts";
 
 test("pre-start onboarding, Ghazi allocation, private handoff, booking and expiry",{skip:!process.env.TEST_DATABASE_URL},async t=>{
   const connectionString=process.env.TEST_DATABASE_URL;
@@ -18,7 +18,7 @@ test("pre-start onboarding, Ghazi allocation, private handoff, booking and expir
   for(const id of [ops,one,two,peer]) await db.query("INSERT INTO staff_members VALUES($1)",[id]);
   await db.query("INSERT INTO welcome_admins VALUES($1)",[ops]);
   await db.query("INSERT INTO academic_staff VALUES($1)",[ops]);
-  registerCurriculum(app,runtime,async cookie=>cookie?{user:{id:cookie,emailVerified:true},session:{id:cookie}}:null,"http://localhost");
+  registerRoutes(app,runtime,async cookie=>cookie?{user:{id:cookie,emailVerified:true},session:{id:cookie}}:null,"http://localhost");
   const req=(method:"GET"|"POST"|"PUT",p:string,user:string,payload?:object)=>app.inject({method,url:"/api/v1/"+p,headers:{cookie:user},payload});
   const product=randomUUID(),id=randomUUID(),other=randomUUID(),staff="staff/onboarding",path="onboarding/"+id;
   for(const [e,u] of [[id,alice],[other,bob]]) await db.query(`INSERT INTO enrollments(id,user_id,product_key,starts_at,ends_at)

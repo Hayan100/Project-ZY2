@@ -1,4 +1,4 @@
-import { registerCurriculum } from "./curriculum.ts";
+import { registerRoutes } from "./router.ts";
 import { registerPayments } from "./payments.ts";
 import { betterAuth } from "better-auth";
 import type { Pool } from "pg";
@@ -82,7 +82,7 @@ export function registerIdentity(app: FastifyInstance, db: Pool, baseURL: string
   function principal(cookie: string | undefined) {
     return auth.api.getSession({ headers: new Headers(cookie ? { cookie } : {}) });
   }
-  registerCurriculum(app, db, principal, origin);
+  registerRoutes(app, db, principal, origin);
   registerPayments(app, db, principal, origin, Boolean(google));
   app.get("/api/v1/me", async (req, reply) => {
     const identity = await principal(req.headers.cookie);

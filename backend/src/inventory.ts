@@ -31,6 +31,10 @@ export function registerInventory(app:FastifyInstance,session:Session,academic:A
   const publishedPosts=`FROM community_posts p JOIN published_resource_posts r ON r.id=p.id
     WHERE p.space=ANY($2::uuid[]) AND NOT EXISTS (SELECT FROM community_blocks b
       WHERE (b.actor,b.peer) IN (($1,p.author),(p.author,$1)))`;
+  app.get<Path>(root+"/community/:id",{schema:{params}},req=>session(req,async(tx,actor)=>{
+    const posts=await savedCommunity(tx,actor.id,req.params.id);
+    return posts[0]??fail(404);
+  }));
   app.put<Path & {Body:{saved:boolean}}>(root+"/community/:id",{schema:{params,body:obj({saved:{type:"boolean"}})}},
     req=>session(req,async(tx,actor)=>{
       const {id}=req.params;
@@ -60,15 +64,20 @@ export function registerInventory(app:FastifyInstance,session:Session,academic:A
       const source=sources.get(sheet.id)!;
       return {...sheet,...source,href:root+"/courses/"+source.course+"/lessons/"+source.lesson+"/sheets/"+sheet.id};
     });
+    const community=await savedCommunity(tx,actor.id);
+    return {academy,community};
+  }));
+  async function savedCommunity(tx:PoolClient,user:string,id?:string) {
     let channels:{id:string}[];
-    try {channels=await visible(tx,actor.id,undefined,"resources");}
+    try {channels=await visible(tx,user,undefined,"resources");}
     catch(error) {
       if((error as {statusCode?:number}).statusCode!==403) throw error;
       channels=[];
     }
-    const community=(await tx.query(`SELECT p.id,p.space,p.body ${publishedPosts}
-      AND EXISTS(SELECT FROM inventory_saves WHERE student=$1 AND post=p.id) ORDER BY p.created DESC,p.id`,
-      [actor.id,channels.map(c=>c.id)])).rows;
-    return {academy,community};
-  }));
+    return (await tx.query(`SELECT p.id,p.space,p.body ${publishedPosts}
+      AND EXISTS(SELECT FROM inventory_saves WHERE student=$1 AND post=p.id)
+      AND ($3::uuid IS NULL OR p.id=$3) ORDER BY p.created DESC,p.id`,
+      [user,channels.map(c=>c.id),id])).rows;
+  }
+  return savedCommunity;
 }

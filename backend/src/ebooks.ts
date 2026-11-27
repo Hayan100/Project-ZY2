@@ -139,4 +139,5 @@ export function registerEbooks(app:FastifyInstance, session:ReturnType<typeof se
       RETURNING page_id AS "pageId",studied`,[actor.id,req.params.id,req.params.pageId,req.body.studied]);
     return result.rows[0];
   }));
+  return bookFor;
 }

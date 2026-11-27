@@ -354,3 +354,17 @@ Apply migration 18 and the curriculum grants. GET `/api/v1/inventory` for the si
 | Author a reference sheet | Academic staff POST `/staff/inventory/sheets` with a client UUID `id`, `title`, and plain-text `body`. Repeat the same submission safely. Link the sheet ID in a lesson’s `relatedResourceIds` and publish the course revision. To replace a sheet, publish the replacement ID in the course. |
 | Read a sheet | Open its Inventory `href`, or use `/inventory/courses/:course/lessons/:lesson/sheets/:id` from the lesson. The reader checks active enrollment, the published lesson link, its release time and prerequisites at each request. A sheet shared across multiple accessible lessons appears once. |
 | Save a Community resource | PUT `/inventory/community/:id` with `{"saved":true}` using the approved resource post’s ID. Inventory reads the original text or link and checks channel access, moderation, restrictions and blocks. A saved reference can become visible again after access returns. Send `{"saved":false}` to forget it, including while it is hidden. |
+
+### Unified Saved view
+
+Apply migration 19 and the curriculum grants. GET `/api/v1/me/saved` returns the caller’s lesson, ebook-page and Inventory bookmarks. An available item includes its reader URL. A changed lesson resource or edited page is marked `changed`. An inaccessible or removed source returns only its bookmark key and `unavailable`. A student can remove it while access is suspended.
+
+PUT `/api/v1/me/saved` with `saved`, `kind`, `source` and `target`. For a lesson, supply the course and lesson IDs. For a page, supply the book and page IDs, plus the optional `course` and `lesson` reader context. For an academy sheet, supply the course and sheet IDs and the linking `lesson`. Community items reuse Inventory’s existing save and remove endpoint.
+
+### Backend integration checks
+
+GitHub Actions provisions PostgreSQL on pushes and pull requests. To run the same setup locally, point `DATABASE_URL` and `TEST_DATABASE_URL` at a fresh disposable database owned by the test connection. From `backend`, run `npm ci`, `npm run check`, `npm run migrate`, `psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f test/bootstrap.sql`, then `npm test`. In PowerShell use `$env:DATABASE_URL` for the psql argument.
+
+The Stoat gateway reserves a digest of the send request, releases the database connection for HTTP, and rechecks authorization before publishing the message reference. Retry an interrupted send using the same UUID and text. If access is withdrawn after Stoat accepts the message, the private bot channel may contain a message without a published LMS reference.
+
+API clients can use the stable error codes `conflict` (409) and `validation_failed` (422). The delivery worker writes structured JSON to stderr when it schedules a retry, including the invoice ID, channel, attempt, and next retry time.

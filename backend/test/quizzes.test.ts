@@ -3,7 +3,7 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { buildApi } from "../src/api.ts";
-import { registerCurriculum } from "../src/curriculum.ts";
+import { registerRoutes } from "../src/router.ts";
 
 test("lesson quizzes pin revisions, lock tutor answers, preserve omissions and enforce access",
   {skip:!process.env.TEST_DATABASE_URL},async t=>{
@@ -23,7 +23,7 @@ test("lesson quizzes pin revisions, lock tutor answers, preserve omissions and e
   await owner.query("INSERT INTO academic_staff VALUES ($1)",[staff]);
   const enroll=(key:string)=>owner.query(`INSERT INTO enrollments(user_id,product_key,starts_at,ends_at)
     VALUES ($1,$2,now(),now()+interval '1 hour')`,[student,key]);
-  registerCurriculum(app,runtime,async cookie=>cookie?{user:{id:cookie,emailVerified:true},session:{id:cookie}}:null,"http://localhost");
+  registerRoutes(app,runtime,async cookie=>cookie?{user:{id:cookie,emailVerified:true},session:{id:cookie}}:null,"http://localhost");
   const request=(method:"GET"|"POST"|"PUT",path:string,cookie:string,payload?:object)=>
     app.inject({method,url:"/api/v1/"+path,headers:{cookie},payload});
 

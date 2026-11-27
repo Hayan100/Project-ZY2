@@ -3,7 +3,7 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { buildApi } from "../src/api.ts";
-import { registerCurriculum } from "../src/curriculum.ts";
+import { registerRoutes } from "../src/router.ts";
 
 test("published ebooks share stable pages and reading state across authorized entry points",
   {skip:!process.env.TEST_DATABASE_URL},async t=>{
@@ -23,7 +23,7 @@ test("published ebooks share stable pages and reading state across authorized en
   await owner.query("INSERT INTO academic_staff VALUES ($1)",[staff]);
   const enroll=(key:string)=>owner.query(`INSERT INTO enrollments(user_id,product_key,starts_at,ends_at)
     VALUES ($1,$2,now(),now()+interval '1 hour')`,[student,key]);
-  registerCurriculum(app,runtime,async cookie=>cookie?{user:{id:cookie,emailVerified:true},session:{id:cookie}}:null,"http://localhost");
+  registerRoutes(app,runtime,async cookie=>cookie?{user:{id:cookie,emailVerified:true},session:{id:cookie}}:null,"http://localhost");
   const request=(method:"GET"|"POST"|"PUT",path:string,cookie:string,payload?:object)=>
     app.inject({method,url:"/api/v1/"+path,headers:{cookie},payload});
   const author="staff/ebooks", library="ebooks/"+book;
@@ -48,6 +48,10 @@ test("published ebooks share stable pages and reading state across authorized en
   assert.equal((await get(library+"?courseId="+course)).statusCode,400);
   const pagePath=library+"/pages/"+page.id;
   assert.deepEqual((await get(pagePath+context)).json().page,page);
+  const bookmark={kind:"page",source:book,target:page.id,course,lesson,saved:true};
+  assert.equal((await request("PUT","me/saved",student,bookmark)).statusCode,200);
+  assert.equal((await get("me/saved")).json().items[0].href,"/api/v1/"+pagePath+context);
+  assert.deepEqual((await request("GET","me/saved",staff)).json().items,[]);
   assert.equal((await request("PUT",pagePath+"/reading"+context,student,{revision:1,studied:true})).statusCode,200);
   await enroll(libraryKey);
   assert.deepEqual((await get("ebooks?q=botany")).json().ebooks,[{id:book,revision:1,title:"Biology",exam:"MDCAT",subject:"Botany",

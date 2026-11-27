@@ -3,7 +3,7 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { buildApi } from "../src/api.ts";
-import { registerCurriculum } from "../src/curriculum.ts";
+import { registerRoutes } from "../src/router.ts";
 
 test("academic revisions publish atomically and follow current enrollment", { skip: !process.env.TEST_DATABASE_URL }, async t => {
   const connectionString = process.env.TEST_DATABASE_URL;
@@ -17,7 +17,7 @@ test("academic revisions publish atomically and follow current enrollment", { sk
     await owner.query('INSERT INTO session(id,"userId",token,"createdAt","updatedAt","expiresAt") VALUES ($1,$1,$1,now(),now(),now()+interval \'1 hour\')', [user]);
   }
   const origin = "http://localhost";
-  registerCurriculum(app, runtime, async cookie => cookie ? { user: { id: cookie, emailVerified: true }, session: { id: cookie } } : null, origin);
+  registerRoutes(app, runtime, async cookie => cookie ? { user: { id: cookie, emailVerified: true }, session: { id: cookie } } : null, origin);
   const staff = "/api/v1/staff/courses", detail = staff+"/"+id, mine = "/api/v1/courses";
   const request = (method: "GET"|"POST"|"PUT", url: string, cookie: string, payload?: object) =>
     app.inject({ method, url, headers: { cookie, origin }, payload });
@@ -50,6 +50,11 @@ test("academic revisions publish atomically and follow current enrollment", { sk
   assert.equal((await publish(2)).statusCode,200);
   assert.equal((await request("GET",inventory,student)).json().academy[0].href,sheetPath);
   assert.deepEqual((await request("GET",sheetPath,student)).json(),sheet);
+  const saved="/api/v1/me/saved";
+  const lessonMark={kind:"lesson",source:id,target:lesson.id,saved:true};
+  const sheetMark={kind:"sheet",source:id,target:sheet.id,lesson:lesson.id,saved:true};
+  for(const mark of [lessonMark,sheetMark,lessonMark]) assert.equal((await request("PUT",saved,student,mark)).statusCode,200);
+  assert.equal((await request("GET",saved,student)).json().items.length,2);
   assert.equal((await publish(2)).statusCode,200);
   assert.equal((await save(2,"Revised")).statusCode,200);
   assert.equal((await read()).json().outline.title,"Biology");
@@ -87,6 +92,7 @@ test("academic revisions publish atomically and follow current enrollment", { sk
   assert.equal((await mark(lesson.id,2,false)).json().completed,true);
   assert.equal((await newDraft(5,[{...lesson, resourceId:randomUUID()},follow,future])).statusCode,200);
   assert.equal((await publish(6)).statusCode,200);
+  assert.equal((await request("GET",saved,student)).json().items[0].state,"changed");
   assert.equal((await open(lesson.id)).json().version,0);
   assert.equal((await open(follow.id)).statusCode,403);
   assert.equal((await mark(lesson.id,0,true)).statusCode,409);
@@ -98,9 +104,12 @@ test("academic revisions publish atomically and follow current enrollment", { sk
     assert.equal((await open(lesson.id)).statusCode,404);
     assert.equal((await request("GET",sheetPath,student)).statusCode,404);
     assert.deepEqual((await request("GET",inventory,student)).json().academy,[]);
+    const bookmarks=(await request("GET",saved,student)).json().items;
+    assert.ok(bookmarks.every((item:{state:string;href?:string;title?:string})=>item.state==="unavailable" && !item.href && !item.title));
     assert.equal((await mark(lesson.id,0,true,6)).statusCode,404);
     assert.deepEqual((await request("GET",mine,student)).json().courses,[]);
   }
   await owner.query("INSERT INTO temporary_credentials VALUES ($1, now()+interval '1 day')", [author]);
+  assert.equal((await request("PUT",saved,student,{...lessonMark,saved:false})).statusCode,200);
   assert.equal((await save(3,"Blocked")).statusCode,403);
 });

@@ -3,7 +3,7 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { buildApi } from "../src/api.ts";
-import { registerCurriculum } from "../src/curriculum.ts";
+import { registerRoutes } from "../src/router.ts";
 
 test("feature suggestions require review, count distinct votes and protect staff updates", {skip:!process.env.TEST_DATABASE_URL}, async t => {
   const connectionString = process.env.TEST_DATABASE_URL;
@@ -19,7 +19,7 @@ test("feature suggestions require review, count distinct votes and protect staff
   }
   await db.query("INSERT INTO staff_members VALUES($1)",[reviewer]);
   await db.query("INSERT INTO community_moderators VALUES($1)",[reviewer]);
-  registerCurriculum(app,runtime,async cookie=>cookie ? {user:{id:cookie,emailVerified:true},session:{id:cookie}} : null,"http://localhost");
+  registerRoutes(app,runtime,async cookie=>cookie ? {user:{id:cookie,emailVerified:true},session:{id:cookie}} : null,"http://localhost");
   async function call(user:string,method:"GET"|"POST"|"PUT",url:string,payload?:object,status=200) {
     const res = await app.inject({method,url:"/api/v1/"+url,headers:{cookie:user},payload});
     assert.equal(res.statusCode,status,res.body);

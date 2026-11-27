@@ -3,7 +3,7 @@ import test from "node:test";
 import {randomUUID} from "node:crypto";
 import {Pool} from "pg";
 import {buildApi} from "../src/api.ts";
-import {registerCurriculum} from "../src/curriculum.ts";
+import {registerRoutes} from "../src/router.ts";
 
 test("family chat, Hall, opt-in ranking and transfers follow the current shared-space entitlement",{skip:!process.env.TEST_DATABASE_URL},async t=>{
   const connectionString=process.env.TEST_DATABASE_URL;
@@ -17,7 +17,7 @@ test("family chat, Hall, opt-in ranking and transfers follow the current shared-
   }
   for(const id of [ops,one,two]) await db.query("INSERT INTO staff_members VALUES($1)",[id]);
   await db.query("INSERT INTO welcome_admins VALUES($1)",[ops]);
-  registerCurriculum(app,runtime,async cookie=>cookie?{user:{id:cookie,emailVerified:true},session:{id:cookie}}:null,"http://localhost");
+  registerRoutes(app,runtime,async cookie=>cookie?{user:{id:cookie,emailVerified:true},session:{id:cookie}}:null,"http://localhost");
   const req=(method:"GET"|"POST"|"PUT",p:string,user:string,payload?:object)=>app.inject({method,url:"/api/v1/"+p,headers:{cookie:user},payload});
   const get=(p:string,user=alice)=>req("GET",p,user);
   const post=(p:string,user:string,b:object={})=>req("POST",p,user,b);

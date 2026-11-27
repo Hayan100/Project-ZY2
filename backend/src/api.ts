@@ -31,6 +31,8 @@ export function buildApi(readPublished: () => Promise<Program[]>, logger = false
   app.setErrorHandler((error, request, reply) => {
     const status = typeof error === "object" && error && "statusCode" in error
       ? Number(error.statusCode) : 500;
+    if (status === 409) return reply.code(status).send({ error: "Request conflicts with current state", code: "conflict" });
+    if (status === 422) return reply.code(status).send({ error: "Request failed validation", code: "validation_failed" });
     if (status >= 400 && status < 500) return reply.code(status).send({ error: "Invalid request" });
     request.log.error({ requestId: request.id }, "Request failed");
     return reply.code(503).send({ error: "Service unavailable" });
