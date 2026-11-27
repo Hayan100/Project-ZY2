@@ -1,9 +1,10 @@
+import { registerLearning, validatePrerequisites } from "./learning.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool, PoolClient } from "pg";
 import { fail, sessionTransaction, type Identity } from "./authorized.ts";
 
-type Lesson = { id: string; title: string; type: string; resourceId?: string; relatedResourceIds?: string[] };
-type Outline = {
+export type Lesson = { id: string; title: string; type: string; resourceId?: string; relatedResourceIds?: string[]; releaseAt?: string; prerequisiteIds?: string[] };
+export type Outline = {
   title: string; examYear?: number; provinces?: string[];
   chapters: { id: string; title: string; lessons: Lesson[] }[];
 };
@@ -16,6 +17,7 @@ const object = (properties: Record<string, object>, required = Object.keys(prope
 const array = (items: object, maxItems: number) => ({ type: "array", items, maxItems });
 const params = object({ id: uuid });
 const lesson = object({ id: uuid, title, type: { enum: ["video","html_article","mcq_quiz","flashcard_review"] },
+  releaseAt: { type: "string", format: "date-time", pattern: "(Z|[+-][0-9]{2}:[0-9]{2})$" }, prerequisiteIds: { ...array(uuid, 64), uniqueItems: true },
   resourceId: uuid, relatedResourceIds: { ...array(uuid, 64), uniqueItems: true } }, ["id","title","type"]);
 const chapter = object({ id: uuid, title, lessons: array(lesson, 500) });
 const outlineSchema = object({ title, chapters: array(chapter, 200), examYear: { type: "integer", minimum: 2000, maximum: 9999 },
@@ -78,6 +80,7 @@ export function registerCurriculum(app: FastifyInstance, db: Pool, principal: Id
       if (row.revision !== version) fail(409);
       const { chapters } = row.outline as Outline;
       if (!chapters.length || chapters.some(ch => !ch.lessons.length || ch.lessons.some(l => !l.resourceId))) fail(422);
+      validatePrerequisites(chapters.flatMap(ch => ch.lessons));
       await tx.query("UPDATE courses SET published_revision=$2 WHERE id=$1", [id, version]);
       await tx.query("UPDATE course_revisions SET published_by=$3,published_at=now() WHERE course_id=$1 AND revision=$2", [id, version, author]);
     }
@@ -88,6 +91,5 @@ export function registerCurriculum(app: FastifyInstance, db: Pool, principal: Id
       AND e.revoked_at IS NULL AND e.starts_at<=now() AND now()<e.ends_at)`;
   app.get("/api/v1/courses", req => session(req, async (tx, actor) => ({ courses: (await tx.query(
     `SELECT c.id,r.revision,r.outline->>'title' AS title ${accessible} ORDER BY title,c.id`, [actor.id])).rows })));
-  app.get<Course>("/api/v1/courses/:id", { schema: { params } }, req => session(req, async (tx, actor) =>
-    (await tx.query(`SELECT c.id,r.revision,r.outline ${accessible} AND c.id=$2`, [actor.id, req.params.id])).rows[0] ?? fail(404)));
+  registerLearning(app, session, accessible);
 }

@@ -49,11 +49,44 @@ test("academic revisions publish atomically and follow current enrollment", { sk
   assert.equal((await publish(3)).statusCode,200);
   assert.equal((await read()).json().outline.title,"Revised");
   assert.equal((await request("GET",detail+"?revision=2",author)).json().outline.title,"Biology");
+  const follow = { ...lesson, id:randomUUID(), resourceId:randomUUID(), prerequisiteIds:[lesson.id] };
+  const future = { ...lesson, id:randomUUID(), resourceId:randomUUID(), releaseAt:"2099-01-01T00:00:00Z" };
+  const newDraft = (revision:number, lessons:object[]) => request("PUT", detail, author, {
+    revision, outline:{...outline, chapters:[{...outline.chapters[0], lessons}]}
+  });
+  assert.equal((await newDraft(3,[{...lesson, prerequisiteIds:[follow.id]}, follow])).statusCode,200);
+  assert.equal((await publish(4)).statusCode,422);
+  assert.equal((await newDraft(4,[lesson,follow,future])).statusCode,200);
+  assert.equal((await publish(5)).statusCode,200);
+  const path = (lessonId:string) => mine+"/"+id+"/lessons/"+lessonId;
+  const open = (lessonId:string) => request("GET",path(lessonId),student);
+  const mark = (lessonId:string, version:number, completed:boolean, revision=5) =>
+    request("PUT",path(lessonId)+"/progress",student,{revision,version,completed,position:{videoSeconds:45}});
+  const detailResponse = (await read()).json();
+  assert.equal(detailResponse.continueLessonId,lesson.id);
+  assert.equal(detailResponse.outline.chapters[0].lessons[1].resourceId,undefined);
+  assert.equal((await open(follow.id)).statusCode,403);
+  assert.equal((await mark(follow.id,0,true)).statusCode,403);
+  assert.equal((await open(future.id)).statusCode,403);
+  const saves = await Promise.all([mark(lesson.id,0,false),mark(lesson.id,0,false)]);
+  assert.deepEqual(saves.map(res=>res.statusCode).sort(),[200,409]);
+  assert.deepEqual((await open(lesson.id)).json().position,{videoSeconds:45});
+  assert.equal((await mark(lesson.id,1,true)).statusCode,200);
+  assert.equal((await read()).json().continueLessonId,follow.id);
+  assert.equal((await open(follow.id)).statusCode,200);
+  assert.equal((await mark(lesson.id,2,false)).json().completed,true);
+  assert.equal((await newDraft(5,[{...lesson, resourceId:randomUUID()},follow,future])).statusCode,200);
+  assert.equal((await publish(6)).statusCode,200);
+  assert.equal((await open(lesson.id)).json().version,0);
+  assert.equal((await open(follow.id)).statusCode,403);
+  assert.equal((await mark(lesson.id,0,true)).statusCode,409);
   await enroll(randomUUID());
   for (const change of ["starts_at=now()+interval '1 minute'", "starts_at=now()-interval '1 hour', ends_at=now()",
     "ends_at=now()+interval '1 hour',revoked_at=now()"]) {
     await owner.query("UPDATE enrollments SET "+change+" WHERE user_id=$1 AND product_key=$2",[student,product]);
     assert.equal((await read()).statusCode,404);
+    assert.equal((await open(lesson.id)).statusCode,404);
+    assert.equal((await mark(lesson.id,0,true,6)).statusCode,404);
     assert.deepEqual((await request("GET",mine,student)).json().courses,[]);
   }
   await owner.query("INSERT INTO temporary_credentials VALUES ($1, now()+interval '1 day')", [author]);

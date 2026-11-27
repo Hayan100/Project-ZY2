@@ -105,3 +105,17 @@ Example creation payload
 ```
 
 Array order sets chapter and lesson order. Preserve lowercase UUIDs across edits and reordering. Each lesson uses `video`, `html_article`, `mcq_quiz` or `flashcard_review` and can include `relatedResourceIds` for ebooks or other materials. Resource IDs identify content for its owning service to authorize. Exam year and province are optional applicability metadata. Drafts can be incomplete. Publication requires at least one chapter, at least one lesson in each chapter and a primary resource ID for every lesson.
+
+## Academy lesson delivery
+
+Academic staff can set an optional ISO timestamp with a timezone in `releaseAt` and list prerequisite lesson UUIDs in `prerequisiteIds`. Publication validates that every prerequisite belongs to the outline and that the dependencies have no cycles. Existing outlines remain available on enrollment.
+
+| Route | Behavior |
+| --- | --- |
+| GET /api/v1/courses/:id | Includes completion counts and `continueLessonId`. Returns the last saved eligible unfinished lesson, or the first eligible unfinished lesson in outline order. Locked entries show the reason and omit resource links. |
+| GET /api/v1/courses/:id/lessons/:lessonId | Returns the eligible lesson, published course revision, progress version, saved position and completion. Locked lessons return 403. |
+| PUT /api/v1/courses/:id/lessons/:lessonId/progress | Saves the signed-in student's position and self-reported completion after checking enrollment and availability. |
+
+Send the `revision` and `version` returned by opening the lesson, along with `completed` and `position`. A video position accepts integer `videoSeconds`, an article position accepts a stable `pageId`, and any lesson accepts an empty position. A 409 means another save or publication won the race. Reopen the lesson before reconciling changes. Completion persists when a student revisits a lesson. Reordering retains progress. Replacing the underlying resource or changing its type starts separate progress. Self-reported completion records study activity only. It grants no quiz score, replay qualification or flashcard scheduling credit.
+
+Apply migrations and reapply `backend/curriculum-grants.sql` before starting the updated API.
