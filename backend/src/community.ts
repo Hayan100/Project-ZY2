@@ -99,7 +99,7 @@ export function registerCommunity(app:FastifyInstance,session:Session,accessible
     for(const c of channels.filter(c=>c.kind==="announcements")) announcements.push(...await posts(tx,"space",c.id,a.id));
     return {announcements:announcements.sort((a,b)=>b.created-a.created).slice(0,30),followed:channels.filter(c=>c.followed),channels,families,
       familyEligibility:families.length?null:"An active family-enabled enrollment and Ghazi assignment are required.",library:"/api/v1/library",mentors:mentors.map(m=>"/api/v1/onboarding/"+m.id+"/messages"),
-      featureBoard:"/api/v1/feature-suggestions",support:process.env.COMMUNITY_SUPPORT_URL??"/api/v1/support/tickets"};
+      featureBoard:"/api/v1/feature-suggestions",help:"/api/v1/support/help",support:process.env.COMMUNITY_SUPPORT_URL??"/api/v1/support/tickets"};
   }));
   app.put<Path & {Body:{follow:boolean}}>(channel+"/follow",{schema:{params,body:obj({follow:{type:"boolean"}})}},req=>session(req,async(tx,a)=>{
     const id=req.params.id;await getChannel(tx,a.id,id);

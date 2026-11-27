@@ -45,9 +45,15 @@ export function registerIdentity(app: FastifyInstance, db: Pool, baseURL: string
           const value = req.headers[key];
           if (typeof value === "string") headers.set(key, value);
         }
-        if (req.method === "POST" && ((req.headers.origin && req.headers.origin !== origin) ||
+        if (req.method === "POST" && (req.headers["sec-fetch-site"] === "cross-site" ||
+            (req.headers.origin && req.headers.origin !== origin) ||
             req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "application/json")) return reply.code(403).send();
         const body = req.body as Record<string, unknown> | undefined;
+        if (route === "sign-up/email") {
+          const name = typeof body?.name === "string" ? body.name.normalize("NFC").trim() : "";
+          if (!name || name.length > 200 || /[\p{Cc}\p{Bidi_Control}]/u.test(name)) return reply.code(400).send();
+          body!.name = name;
+        }
         if (body?.checkoutOfferId !== undefined) {
           if (typeof body.checkoutOfferId !== "string" || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(body.checkoutOfferId)) return reply.code(400).send();
           const resume = origin + "/api/v1/checkout/" + body.checkoutOfferId;

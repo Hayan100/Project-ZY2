@@ -7,9 +7,25 @@ const actions = ["reply", "claim", "escalate", "resolve", "reopen"];
 type Ticket = { id: string; category: string; subject: string; description: string; reportedStaff?: string };
 type Event = { version: number; action: string; message: string };
 const fields = "t.id,t.category,t.subject,t.resolved,t.escalated,t.version,t.updated_at";
+const guidance = [
+  {category:"access_payment", title:"My payment is under review", text:"Open your invoice to check the review status. If staff request a correction, submit the corrected proof on that invoice. Include the invoice ID in a private ticket if you need help."},
+  {category:"access_payment", title:"I cannot open a paid course", text:"Sign in with the account used for the purchase and check the product and access dates. If access is still missing, open a payment or access ticket with the course name."},
+  {category:"technical", title:"A page or reader will not load", text:"Reopen the page while online. If it still fails, include the page name, device, and error message in a technical ticket. Keep passwords and sign-in links private."},
+  {category:"service_complaint", title:"Report a service complaint privately", text:"Open a service complaint ticket. You can identify the staff member involved. Designated senior reviewers handle complaints, and the reported staff member cannot open your ticket."},
+];
 
 export function registerSupport(app: FastifyInstance, session: Session) {
   const root = "/api/v1/support/tickets";
+  app.get<{Querystring:{q?:string;category?:string}}>("/api/v1/support/help", {schema:{querystring:obj({
+    q:label(120), category:{enum:categories}
+  },[])}}, req => session(req, async () => {
+    const terms = (req.query.q ?? "").trim().toLowerCase().split(/\s+/);
+    const articles = guidance.filter(article => {
+      const text = (article.title+" "+article.text).toLowerCase();
+      return (!req.query.category || article.category===req.query.category) && terms.every(term=>text.includes(term));
+    });
+    return {articles,tickets:root};
+  }));
   app.post<{Body: Ticket}>(root, { schema: { body: obj({
     id: uuid, category: {enum: categories}, subject: label(160), description: label(3000), reportedStaff: label(200)
   }, ["id","category","subject","description"]) } }, req => session(req, async (tx, actor) => {

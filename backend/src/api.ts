@@ -5,7 +5,11 @@ import { LRUCache } from "lru-cache";
 export type Program = { code: string; name: string };
 
 export function buildApi(readPublished: () => Promise<Program[]>, logger = false) {
-  const app = Fastify({ logger: logger && { serializers: { req: (req: { method: string }) => ({ method: req.method }) } }, bodyLimit: 16_384 });
+  const app = Fastify({
+    logger: logger && { serializers: { req: (req: { method: string }) => ({ method: req.method }) } },
+    bodyLimit: 16_384, requestTimeout: 60_000, trustProxy: false,
+    onProtoPoisoning: "error", onConstructorPoisoning: "error",
+  });
   app.register(helmet);
 
   // Each process refreshes independently. Publishing changes appear within 60 seconds.

@@ -26,11 +26,23 @@ test("verified login, replacement, activation and product access", { skip: !proc
     assert.equal(res.statusCode, 200, res.body);
     return res.cookies.map(c => c.name + "=" + c.value).join("; ");
   };
-  const signup = await post("sign-up/email", { email, name: "Student", password, role: "staff" });
+  assert.equal((await post("sign-up/email",{email,name:"x".repeat(201),password})).statusCode,400);
+  assert.equal((await post("sign-up/email",{email,name:"line\nbreak",password})).statusCode,400);
+  const crossSite = await app.inject({method:"POST",url:"/api/auth/sign-up/email",
+    headers:{"sec-fetch-site":"cross-site"},payload:{email,name:"Student",password}});
+  assert.equal(crossSite.statusCode,403);
+  const signup = await post("sign-up/email", { email, name: "  Rene\u0301  ", password, role: "staff" });
   assert.equal(signup.statusCode, 200, signup.body);
+  assert.equal((await owner.query('SELECT name FROM "user" WHERE email=$1',[email])).rows[0].name,"René");
   assert.equal((await login()).statusCode, 403);
   const link = new URL(message.trim().split("\n").at(-1)!);
   assert.ok((await app.inject(link.pathname + link.search)).statusCode < 400);
+  const replay = await app.inject(link.pathname + link.search);
+  assert.equal(replay.cookies.filter(c=>c.name.includes("session_token")).length,0);
+  const peerLogin = await app.inject({method:"POST",url:"/api/auth/sign-in/email",remoteAddress:"192.0.2.88",
+    headers:{origin,"x-client-ip":"198.51.100.17","x-forwarded-for":"198.51.100.17"},payload:{email,password}});
+  assert.equal(peerLogin.statusCode,200,peerLogin.body);
+  assert.equal((await owner.query('SELECT s."ipAddress" FROM session s JOIN "user" u ON u.id=s."userId" WHERE u.email=$1',[email])).rows[0].ipAddress,"192.0.2.88");
   const old = sessionCookie(await login());
   const simultaneous = await Promise.all([login(), login()]);
   const cookies = simultaneous.map(sessionCookie);

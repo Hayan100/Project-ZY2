@@ -27,8 +27,14 @@ test("private tickets retain history and restrict complaint and escalation queue
     return res.json();
   }
   const mine = "support/tickets", queue = "staff/"+mine;
+  await call("","support/help",undefined,401);
+  const help = await call(student,"support/help?q=READER&pageIgnored=true&category=technical");
+  assert.equal(help.articles.length,1);
+  assert.equal(help.tickets,"/api/v1/support/tickets");
+  await call(student,"support/help?q="+"x".repeat(121),undefined,400);
   const body = {id:randomUUID(),category:"technical",subject:"Reader",description:"Page stops loading"};
   await call(student,mine,body);
+  assert.deepEqual((await call(peer,"support/help?q=Page%20stops%20loading")).articles,[]);
   await call(student,mine,body);
   await call(student,mine,{...body,subject:"Changed"},409);
   const item = "/"+body.id;
