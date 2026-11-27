@@ -12,6 +12,8 @@ After a missed slot, PUT a client UUID and reason to `/requests` under the premi
 
 ## Formal Test Portal
 
+My Camp (`GET /api/v1/me/camp`) includes `scheduledSessions` alongside planner events. It shows up to five currently open or upcoming eligible classes and registered ranked tests, ordered by opening time. An open class supplies its POST join action. A future class has no join action yet. A test supplies its GET lobby action throughout the scheduled window; the lobby and attempt endpoints enforce entry deadlines and attempt rules.
+
 Academic staff POST an immutable quiz and rules snapshot to `/staff/tests`. Rules specify opening, entry cutoff, ranked close, duration, grace, pause, irreversible OMR choices, ranked-attempt allowance, correct/wrong/omitted points and score, rank and key release times. Optional product, batch or paid-offer restrictions narrow registration. Optional staff-defined registration fields supplement the standard profile. Optional `practiceUntil` allows unranked practice after closure.
 
 Use `GET /tests`, `PUT /tests/:id/registration`, and `GET /tests/:id/lobby`. Existing identity and payment verification apply. The lobby returns rules, registration ID and attempts. POST a retryable attempt UUID to `/tests/:id/attempts`. The returned deadline applies across devices. Strict mode uses the common deadline. Grace mode deducts lateness beyond grace. Window mode gives the configured duration up to ranked close.

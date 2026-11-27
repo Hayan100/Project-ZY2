@@ -18,13 +18,13 @@ const ruleFields={opens:instant,entryCutoff:instant,rankedClose:instant,scoreRel
   wrongPoints:integer(-100,0),omitPoints:integer(-100,0)};
 const rulesSchema=object({...ruleFields,product:label(120),offer:uuid,batch:uuid,practiceUntil:instant,
   fields:{type:"array",items:label(80),uniqueItems:true,maxItems:20}},Object.keys(ruleFields));
-const eligible=`(t.rules->>'product' IS NULL OR EXISTS(SELECT FROM enrollments e WHERE e.user_id=$1
+export const testEligibility=`(t.rules->>'product' IS NULL OR EXISTS(SELECT FROM enrollments e WHERE e.user_id=$1
   AND e.product_key=t.rules->>'product' AND e.revoked_at IS NULL AND now()>=e.starts_at AND now()<e.ends_at))
   AND (t.rules->>'batch' IS NULL OR EXISTS(SELECT FROM active_planner_batches b WHERE b.user_id=$1
     AND b.batch_id=(t.rules->>'batch')::uuid AND now()>=b.starts_at AND now()<b.ends_at))`;
 type Event={id:string;rules:Rules;quiz:Quiz};
 async function event(tx:PoolClient,user:string,id:string) {
-  return (await tx.query<Event>(`SELECT t.id,t.rules,t.quiz FROM formal_tests t WHERE t.id=$2 AND ${eligible}`,[user,id])).rows[0]??fail(404);
+  return (await tx.query<Event>(`SELECT t.id,t.rules,t.quiz FROM formal_tests t WHERE t.id=$2 AND ${testEligibility}`,[user,id])).rows[0]??fail(404);
 }
 function initialDeadline(r:Rules,start:number) {
   const duration=r.durationMinutes*60000,open=Date.parse(r.opens);
@@ -53,7 +53,7 @@ export function registerFormalTests(app:FastifyInstance,session:ReturnType<typeo
       return {id};
     }));
   app.get(base,req=>session(req,async(tx,a)=>({tests:(await tx.query(`SELECT t.id,t.quiz->>'title' AS title,t.rules,r.id AS registration
-    FROM formal_tests t LEFT JOIN formal_registrations r ON r.event=t.id AND r.student=$1 WHERE ${eligible}
+    FROM formal_tests t LEFT JOIN formal_registrations r ON r.event=t.id AND r.student=$1 WHERE ${testEligibility}
     ORDER BY (t.rules->>'opens')::timestamptz,t.id`,[a.id])).rows})));
   type Form={name:string;email:string;phone:string;exam:string;province:string;city:string;preparation:string;
     admissionsConsent:boolean;extra:Record<string,string>};
@@ -171,7 +171,7 @@ export function registerFormalTests(app:FastifyInstance,session:ReturnType<typeo
     return fresh;
   }));
   app.get<Id>(base+"/:id/results",{schema:{params}},req=>session(req,async(tx,actor)=>{
-    const t=(await tx.query<Event & {eligible:boolean}>(`SELECT t.id,t.rules,t.quiz,(${eligible}) AS eligible FROM formal_tests t
+    const t=(await tx.query<Event & {eligible:boolean}>(`SELECT t.id,t.rules,t.quiz,(${testEligibility}) AS eligible FROM formal_tests t
       WHERE t.id=$2 AND EXISTS(SELECT FROM formal_registrations r WHERE r.event=t.id AND r.student=$1)`,[actor.id,req.params.id])).rows[0]??fail(403);
     const now=Date.now();
     const scores=now<Date.parse(t.rules.scoreRelease)?[]:(await tx.query("SELECT id,correct,incorrect,omitted,score,started_at,finished_at FROM formal_scores WHERE student=$1 AND event=$2 ORDER BY started_at",[actor.id,t.id])).rows;

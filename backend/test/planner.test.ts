@@ -107,8 +107,33 @@ test("My Camp shares an access-aware planner, consented schedules and canonical 
   assert.ok(notices.some((n:{kind:string})=>n.kind==="student_rescheduled"));
   assert.equal((await request("PATCH",base+"/tasks/"+own.id,staff,{version:3,completed:true})).statusCode,404);
   assert.equal((await request("PATCH",base+"/tasks/"+own.id,student,{version:3,completed:true})).statusCode,200);
+  const openClass=randomUUID(),nextClass=randomUUID(),exam=randomUUID();
+  const addClass=async(id:string,product:string,start:string,finish:string)=>{
+    await owner.query(`INSERT INTO classes(id,title,product,kind,opens,closes,author)
+      VALUES($1,'Camp lecture',$2,'broadcast',now()+$3::interval,now()+$4::interval,$5)`,[id,product,start,finish,staff]);
+  };
+  await addClass(openClass,courseKey,"-5 minutes","1 hour");
+  await owner.query("UPDATE classes SET youtube_video_id=$2 WHERE id=$1",[openClass,openClass.slice(0,11)]);
+  await addClass(nextClass,courseKey,"2 hours","3 hours");
+  await addClass(randomUUID(),courseKey,"-3 hours","-2 hours");
+  await addClass(randomUUID(),randomUUID(),"-5 minutes","1 hour");
+  const otherBatch=randomUUID(),otherClass=randomUUID();
+  await owner.query("INSERT INTO admission_batches(id,capacity) VALUES($1,10)",[otherBatch]);
+  await addClass(otherClass,courseKey,"-5 minutes","1 hour");
+  await owner.query("UPDATE classes SET batch=$2 WHERE id=$1",[otherClass,otherBatch]);
+  const rules={product:courseKey,opens:at("09:00"),rankedClose:at("12:00")};
+  for(const id of [exam,randomUUID()])await owner.query("INSERT INTO formal_tests(id,author,quiz,rules) VALUES ($1,$2,$3,$4)",[id,staff,{title:"Registered mock"},rules]);
+  await owner.query("INSERT INTO formal_registrations(event,student,form) VALUES ($1,$2,'{}')",[exam,student]);
   const camp=await get("me/camp");
   assert.equal(camp.statusCode,200,camp.body);
+  const sessions=camp.json().scheduledSessions;
+  assert.deepEqual(sessions.map((s:{id:string})=>s.id),[openClass,nextClass,exam]);
+  assert.deepEqual(sessions[0].action,{method:"POST",url:"/api/v1/classes/"+openClass+"/join"});
+  assert.equal(sessions[1].action,null);
+  assert.deepEqual(sessions[2].action,{method:"GET",url:"/api/v1/tests/"+exam+"/lobby"});
+  const followShortcut=(action:{method:"GET"|"POST";url:string})=>app.inject({...action,headers:{cookie:student}});
+  assert.equal((await followShortcut(sessions[0].action)).json().joinUrl,"/api/v1/classes/"+openClass+"/watch");
+  assert.equal((await followShortcut(sessions[2].action)).json().id,exam);
   assert.equal(camp.json().continueLesson.lessonId,lesson);
   assert.equal(camp.json().upcomingEvents[0].id,event);
   assert.equal(camp.json().revision.due,(await get("me/revision")).json().dueCount);
@@ -164,6 +189,9 @@ test("My Camp shares an access-aware planner, consented schedules and canonical 
   assert.deepEqual(historical.currentCoverage.lessonQuizzes,{eligible:0,used:0});
   assert.equal(historical.quiz.correct,1);
   assert.deepEqual(after.upcomingEvents,[]);
+  assert.deepEqual(after.scheduledSessions,[]);
+  assert.equal((await followShortcut(sessions[0].action)).statusCode,403);
+  assert.equal((await followShortcut(sessions[2].action)).statusCode,404);
   const remaining=(await get(base+"?date="+future)).json().tasks;
   assert.ok(remaining.some((t:{title:string;lessonUrl:string|null})=>t.title==="Study task" && t.lessonUrl===null));
 });

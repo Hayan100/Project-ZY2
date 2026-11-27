@@ -6,6 +6,8 @@ import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
 import { fail, type Academic, type sessionTransaction } from "./authorized.ts";
 import { continueLesson, loadCourse } from "./learning.ts";
+import {classEligibility} from "./classrooms.ts";
+import {testEligibility} from "./formal-tests.ts";
 
 const zone="Asia/Karachi", dayMs=86400000, minute=60000;
 const localDate=(date:Date)=>new Intl.DateTimeFormat("en-CA",{timeZone:zone,year:"numeric",month:"2-digit",day:"2-digit"}).format(date);
@@ -317,6 +319,19 @@ export function registerPlanner(app:FastifyInstance,session:Session,academic:Aca
     const now=new Date(), user=actor.id, plan=await schedule(tx,user),courses=await curriculum(tx,user,accessible);
     const today=planner(plan,courses,localDate(now),"today",now);
     const upcoming=plan.events.filter(e=>end(e)>+now && e.kind!=="revision").slice(0,5);
+    const {rows:sessions}=await tx.query(`SELECT *, opens<=now() AS "windowOpen" FROM (
+      SELECT 'class' AS kind,c.id,c.title,c.opens,c.closes FROM classes c
+      WHERE c.closes>now() AND ${classEligibility}
+      UNION ALL
+      SELECT 'test',t.id,t.quiz->>'title',(t.rules->>'opens')::timestamptz,(t.rules->>'rankedClose')::timestamptz
+      FROM formal_registrations r JOIN formal_tests t ON t.id=r.event
+      WHERE r.student=$1 AND (t.rules->>'rankedClose')::timestamptz>now() AND ${testEligibility}
+    ) scheduled ORDER BY opens,kind,id LIMIT 5`,[user]);
+    const scheduledSessions=sessions.map(row=>{
+      const action=row.kind==="test"?{method:"GET",url:`/api/v1/tests/${row.id}/lobby`}:
+        row.windowOpen?{method:"POST",url:`/api/v1/classes/${row.id}/join`}:null;
+      return {...row,action};
+    });
     const nextTask=plan.tasks.find(t=>!t.completed_at && end(t)>=+now);
     const quickStarts=Array.from(courses,([courseId,course])=>{
       const l=continueLesson(course);
@@ -331,7 +346,7 @@ export function registerPlanner(app:FastifyInstance,session:Session,academic:Aca
     const reading=await lastReadPage(tx,user,[...allowed.keys()]);
     const rev=await revisionSummary(tx,user);
     const onboarding=await welcomeChecklist(tx,user);
-    return {familyPresence:await familyStrip(tx,user),onboarding,planner:{...today,tasks:today.tasks.slice(0,5),events:today.events.slice(0,5),overdue:today.overdue.slice(0,5),
+    return {familyPresence:await familyStrip(tx,user),onboarding,scheduledSessions,planner:{...today,tasks:today.tasks.slice(0,5),events:today.events.slice(0,5),overdue:today.overdue.slice(0,5),
       overdueCount:today.overdue.length,nextTask:nextTask?taskView(nextTask,courses):null,url:base},upcomingEvents:upcoming.map(e=>({...e,url:base+"/events/"+e.id})),
       continueLesson:quickStarts[0]?{courseId:quickStarts[0].courseId,lessonId:quickStarts[0].lessonId,title:quickStarts[0].title,url:quickStarts[0].url}:null,
       continueReading:reading?{...reading,url:allowed.get(reading.bookId)!.url}:null,

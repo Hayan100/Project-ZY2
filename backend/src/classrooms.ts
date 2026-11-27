@@ -10,7 +10,7 @@ const object=(properties:Record<string,object>,required=Object.keys(properties))
 const params=object({id:uuid});
 const viewingSession=(sessionId:string,classId:string)=>createHmac("sha256",sessionId).update(classId).digest("hex");
 type Path={Params:{id:string}};
-const eligible=`EXISTS(SELECT FROM enrollments e WHERE e.user_id=$1 AND e.product_key=c.product AND e.revoked_at IS NULL
+export const classEligibility=`EXISTS(SELECT FROM enrollments e WHERE e.user_id=$1 AND e.product_key=c.product AND e.revoked_at IS NULL
   AND e.starts_at<=now() AND now()<e.ends_at) AND (c.batch IS NULL OR EXISTS(SELECT FROM active_planner_batches b
   WHERE b.user_id=$1 AND b.batch_id=c.batch AND now()>=b.starts_at AND now()<b.ends_at))`;
 const extended="EXISTS(SELECT FROM class_extensions x WHERE x.class=c.id AND x.student=$1 AND x.expires>now())";
@@ -24,7 +24,7 @@ async function attendance(tx:PoolClient,id:string,student:string) {
 export function registerClassrooms(app:FastifyInstance,session:ReturnType<typeof sessionTransaction>,academic:Academic,origin:string) {
   const base="/api/v1/classes",staff="/api/v1/staff/classes";
   async function active(tx:PoolClient,student:string,id:string) {
-    return (await tx.query(`SELECT c.kind,c.title,c.youtube_video_id,c.youtube_state,c.opens,c.closes FROM classes c WHERE c.id=$2 AND now()>=c.opens AND now()<c.closes AND ${eligible}`,
+    return (await tx.query(`SELECT c.kind,c.title,c.youtube_video_id,c.youtube_state,c.opens,c.closes FROM classes c WHERE c.id=$2 AND now()>=c.opens AND now()<c.closes AND ${classEligibility}`,
       [student,id])).rows[0]??fail(403);
   }
   app.post<Path>(base+"/:id/join",{schema:{params}},async req=>{
@@ -109,14 +109,14 @@ export function registerClassrooms(app:FastifyInstance,session:ReturnType<typeof
     return {id:b.id,recordingRequired:true};
   }));
   app.get(base,req=>session(req,async(tx,a)=>({classes:(await tx.query(`SELECT c.id,c.title,c.kind,c.opens,c.closes,true AS "recordingRequired",
-    c.replay IS NOT NULL AND now()>=c.closes AS "replayAvailable" FROM classes c WHERE (${eligible}) OR
+    c.replay IS NOT NULL AND now()>=c.closes AS "replayAvailable" FROM classes c WHERE (${classEligibility}) OR
     (c.replay IS NOT NULL AND now()>=c.closes AND ${extended}) ORDER BY c.opens,c.id`,[a.id])).rows})));
   app.post<Path>(base+"/:id/presence",{schema:{params}},req=>session(req,async(tx,a)=>{
     const expected=req.headers["x-class-session"];
     if(expected!==undefined && expected!==viewingSession(a.session,req.params.id)) fail(403);
     // Join establishes a timestamp. Subsequent online heartbeats confirm only short contiguous intervals.
     const result=await tx.query(`INSERT INTO class_presence(class,student,last_seen)
-      SELECT c.id,$1,now() FROM classes c WHERE c.id=$2 AND c.opens<=now() AND now()<c.closes AND ${eligible}
+      SELECT c.id,$1,now() FROM classes c WHERE c.id=$2 AND c.opens<=now() AND now()<c.closes AND ${classEligibility}
       ON CONFLICT(class,student) DO UPDATE SET seen=class_presence.seen+CASE WHEN excluded.last_seen>=class_presence.last_seen
         AND excluded.last_seen-class_presence.last_seen<=interval '60 seconds'
         THEN tstzmultirange(tstzrange(class_presence.last_seen,excluded.last_seen)) ELSE '{}'::tstzmultirange END,
@@ -159,7 +159,7 @@ export function registerClassrooms(app:FastifyInstance,session:ReturnType<typeof
   }));
   async function replayAsset(tx:PoolClient,student:string,id:string):Promise<string>{
     return ((await tx.query(`SELECT replay FROM classes c WHERE c.id=$2 AND now()>=c.closes AND replay IS NOT NULL
-      AND ((${eligible}) OR ${extended})`,[student,id])).rows[0]??fail(404)).replay;
+      AND ((${classEligibility}) OR ${extended})`,[student,id])).rows[0]??fail(404)).replay;
   }
   app.get<Path>(base+"/:id/replay/watch",{schema:{params}},async(req,reply)=>{
     const page=await recordedPage(req,session,(tx,user)=>replayAsset(tx,user,req.params.id));
