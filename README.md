@@ -178,3 +178,32 @@ The server schedules each accepted rating using pinned `ts-fsrs@5.4.2`, 90% targ
 Initial workload estimates allocate 60 seconds to introducing a new card and 30 seconds to reviewing a seen card. The queue deducts today's estimated time and reserves time for every due card before admitting new cards. Due cards remain available over budget and must be cleared before grading a new card. Daily accounting and the forecast use Asia/Karachi. Forecast counts reflect existing scheduled reviews and change as students rate cards. The estimates and retention setting are initial values for pilot validation.
 
 Install locked backend dependencies, apply migrations and reapply `backend/curriculum-grants.sql` before running the updated API.
+
+## My Camp, Planner and Progress
+
+All routes below are relative to `/api/v1` and use the signed-in session. Calendar dates use Asia/Karachi. Supply full timestamps with a timezone for scheduled work. Apply migration 10 and reapply `backend/curriculum-grants.sql` before starting this API.
+
+| Student route | Behavior |
+| --- | --- |
+| GET /me/camp | Compact daily planner, overdue count, next task, upcoming batch classes/tests, eligible Continue Lesson and Continue Reading links, and the dedicated Revision queue's due and new counts |
+| GET /me/planner | Choose `view=today`, `week` (Monday start) or `month`, and optionally a local `date=YYYY-MM-DD`. Returns tasks and fixed events overlapping the period, overdue work, and task/minute completion totals. Add `download=true` for a JSON export. |
+| POST /me/planner/tasks | Create a personal task with UUID `id`, `title`, `startsAt` and `minutes`. Optional `deadline` limits the finish time. Supply both `courseId` and `lessonId` to link an eligible lesson. |
+| PATCH /me/planner/tasks/:id | Send the current `version` and a new `startsAt` or `completed` boolean. Conflicts and stale versions return 409. Moving beyond the deadline returns 422. Completion updates the planner record only. |
+| POST /me/planner/fixed/:id/change-request | Propose a `startsAt` to the owner of a fixed mentor task or batch event. The current time stays in effect until its owner reschedules it. |
+| GET /me/planner/events/:id | Open an event from the calendar. Eligibility requires active enrollment in its batch and an event start within that enrollment. |
+| GET /me/planner-notices | Latest 100 in-app notices, including old and new times for scheduling changes |
+| GET /me/progress | Individual quiz accuracy, omissions, distinct answered questions and attempt results, daily flashcard rating counts, scheduled task workload, current course and lesson-quiz coverage, and reading progress. Optional inclusive local `from` and `to` filter activity. Current coverage is a separate snapshot. Add `download=true` for JSON. |
+
+**Plan generation and catch-up.** POST `{profile}` to `/me/planner/suggestions/preview`. The following profile schedules study between 6 and 8 p.m. on weekdays. Provide current or future dates spanning at most 366 days.
+
+```json
+{"profile":{"mode":"initial","targetExam":"MDCAT","targetDate":"2027-05-31","startDate":"2027-04-01","weekdays":[1,2,3,4,5],"startMinute":1080,"minutesPerDay":120,"preparation":"revising"}}
+```
+
+Initial plans use published, accessible, unfinished lessons with a staff-authored `estimatedMinutes`. Academic staff can set `exam` on the outline to restrict suggestions to the target track. Unlabelled courses can participate in any track. Starting students follow course order. Revising students get eligible quizzes and flashcards first. Use `mode=catch_up` for overdue flexible tasks, with mentor tasks first and earlier deadlines first within that group. Previews return proposed times and work that could not fit. POST the same profile and returned `token` to `/me/planner/suggestions/accept`. The server recomputes the proposal, rejects stale changes, and applies accepted changes in one transaction. Repeating an accepted token is safe.
+
+**Mentor and batch schedules.** Assigned mentors preview an individual task at `POST /mentor/students/:studentId/planner/tasks/preview`, then send the same body and preview token to `/publish`. Use personal task fields plus optional `fixed`. The existing `revision_mentors` relationship determines authority. The assigning mentor can PATCH their task at `/mentor/students/:studentId/planner/tasks/:id` with its version and revised start time. Students receive publication/change notices. Assigned mentors receive old and new times for student reschedules.
+
+Academic staff preview a calendar event at `POST /staff/planner/events/:id/preview`. Send `batchId`, `title`, `kind` (class, chapter_test, mock or revision), `startsAt`, `minutes`, and the current `revision` (0 for a new event). The preview reports affected students, overlapping events and conflicting tasks. Publish the reviewed payload and token at `/publish`. Revisions share the same event ID, update linked planners, and notify affected students and mentors in-app. Personal work keeps its time until the student approves a move.
+
+Progress reports derive their measures from the lesson, ebook, quiz and review records. Quiz accuracy divides correct answers by committed answers and reports omissions separately. Current lesson-quiz coverage deduplicates shared questions across available lesson links. Historical results and activity counts remain accessible after expiry. Current protected study links are rechecked. Reading's lifetime visited/studied counts cover distinct book pages, while library summaries cover currently published pages.

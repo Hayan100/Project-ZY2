@@ -222,4 +222,5 @@ export function registerFlashcards(app:FastifyInstance,session:ReturnType<typeof
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,[actor.id,eventId,deckId,cardId,revision,version+1,rating,state.now,!prior,next,next.due,cardRevision]);
     return {eventId,version:version+1,dueAt:next.due};
   }));
+  return async (tx:PoolClient,student:string) => (await queue(tx,student)).summary;
 }

@@ -31,6 +31,18 @@ async function save(tx: PoolClient, id:string, version:number, manuscript:Manusc
   return { id, revision:version };
 }
 
+export async function libraryBooks(tx:PoolClient,user:string,query="") {
+  return (await tx.query(`SELECT b.id,r.revision,r.manuscript->>'title' AS title,
+      r.manuscript->>'exam' AS exam,r.manuscript->>'subject' AS subject,reading."resumePageId",reading.visited,reading.studied,
+      jsonb_array_length(r.manuscript->'pages') AS "totalPages" ${published}
+      CROSS JOIN LATERAL (SELECT (array_agg(p.page_id ORDER BY p.last_read_at DESC,p.page_id))[1] AS "resumePageId",
+        count(*)::int AS visited,count(*) FILTER(WHERE p.studied)::int AS studied
+        FROM jsonb_array_elements(r.manuscript->'pages') page JOIN ebook_reading p
+        ON p.page_id=(page->>'id')::uuid AND p.book_id=b.id AND p.user_id=$1) reading
+      WHERE ${entitled} AND strpos(lower(concat_ws(' ',r.manuscript->>'title',r.manuscript->>'subject',r.manuscript->>'exam')),lower($2))>0
+      ORDER BY exam,subject,title,b.id`,[user,query])).rows;
+}
+
 export function registerEbooks(app:FastifyInstance, session:ReturnType<typeof sessionTransaction>, academic:Academic, accessible:string) {
   const staff = "/api/v1/staff/ebooks";
   const library = "/api/v1/ebooks";
@@ -89,15 +101,7 @@ export function registerEbooks(app:FastifyInstance, session:ReturnType<typeof se
     return result.rows[0] ?? fail(404);
   }
   app.get<{Querystring:{q?:string}}>(library,{schema:{querystring:object({q:{type:"string",maxLength:200}},[])}},
-    req=>session(req,async (tx,actor)=>({ebooks:(await tx.query(`SELECT b.id,r.revision,r.manuscript->>'title' AS title,
-      r.manuscript->>'exam' AS exam,r.manuscript->>'subject' AS subject,reading."resumePageId",reading.visited,reading.studied,
-      jsonb_array_length(r.manuscript->'pages') AS "totalPages" ${published}
-      CROSS JOIN LATERAL (SELECT (array_agg(p.page_id ORDER BY p.last_read_at DESC,p.page_id))[1] AS "resumePageId",
-        count(*)::int AS visited,count(*) FILTER(WHERE p.studied)::int AS studied
-        FROM jsonb_array_elements(r.manuscript->'pages') page JOIN ebook_reading p
-        ON p.page_id=(page->>'id')::uuid AND p.book_id=b.id AND p.user_id=$1) reading
-      WHERE ${entitled} AND strpos(lower(concat_ws(' ',r.manuscript->>'title',r.manuscript->>'subject',r.manuscript->>'exam')),lower($2))>0
-      ORDER BY exam,subject,title,b.id`,[actor.id,req.query.q ?? ""])).rows})));
+    req=>session(req,async (tx,actor)=>({ebooks:await libraryBooks(tx,actor.id,req.query.q ?? "")})));
   app.get<Reader>(library+"/:id",{schema:{params,querystring:context}},req=>session(req,async (tx,actor)=>{
     const book=await bookFor(tx,actor.id,req.params.id,req.query);
     const saved=await tx.query("SELECT page_id,studied FROM ebook_reading WHERE user_id=$1 AND book_id=$2 ORDER BY last_read_at DESC,page_id",

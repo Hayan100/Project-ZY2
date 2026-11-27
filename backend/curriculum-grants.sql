@@ -18,3 +18,6 @@ GRANT INSERT (student_id,minutes), UPDATE (minutes) ON revision_budgets TO zy2_a
 GRANT INSERT ON card_reviews TO zy2_api;
 GRANT SELECT,INSERT,UPDATE (revision,front,back,reset_revision) ON academy_cards TO zy2_api;
 GRANT UPDATE (suggested_minutes) ON revision_mentors TO zy2_api;
+GRANT SELECT ON active_planner_batches,planner_events,current_planner_events,planner_tasks,planner_notices,accepted_plans TO zy2_api;
+GRANT INSERT ON planner_events,planner_tasks,planner_notices,accepted_plans TO zy2_api;
+GRANT UPDATE (starts_at,completed_at,version) ON planner_tasks TO zy2_api;

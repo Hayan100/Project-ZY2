@@ -65,17 +65,22 @@ export function courseLessons<S extends Pick<Saved,"lesson_id"|"resource_id"|"le
   return { lessons, progress, lockReason, available };
 }
 
+export function continueLesson({lessons,progress,lockReason}: Pick<Awaited<ReturnType<typeof loadCourse>>,"lessons"|"progress"|"lockReason">) {
+  let next: Lesson | undefined;
+  for (const l of lessons) {
+    if (lockReason(l) || progress.get(l.id)?.completed) continue;
+    if (!next || (progress.get(l.id)?.updated_at.getTime() ?? 0) > (progress.get(next.id)?.updated_at.getTime() ?? 0)) next = l;
+  }
+  return next;
+}
+
 export function registerLearning(app: FastifyInstance, session: ReturnType<typeof sessionTransaction>, accessible: string) {
   const coursePath = "/api/v1/courses/:id";
   const lessonPath = coursePath + "/lessons/:lessonId";
   app.get<{ Params: { id: string } }>(coursePath, { schema: { params: { ...params, required: ["id"] } } }, req =>
     session(req, async (tx, actor) => {
       const { revision, outline, lessons, progress, lockReason } = await loadCourse(tx,accessible,actor.id,req.params.id);
-      let next: Lesson | undefined;
-      for (const l of lessons) {
-        if (lockReason(l) || progress.get(l.id)?.completed) continue;
-        if (!next || (progress.get(l.id)?.updated_at.getTime() ?? 0) > (progress.get(next.id)?.updated_at.getTime() ?? 0)) next = l;
-      }
+      const next=continueLesson({lessons,progress,lockReason});
       return { id: req.params.id, revision, continueLessonId: next?.id ?? null,
         completedLessons: lessons.filter(l => progress.get(l.id)?.completed).length, totalLessons: lessons.length,
         outline: { ...outline, chapters: outline.chapters.map(ch => ({ ...ch, lessons: ch.lessons.map(l => {

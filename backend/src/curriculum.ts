@@ -1,3 +1,4 @@
+import { registerPlanner } from "./planner.ts";
 import { registerFlashcards } from "./flashcards.ts";
 import { registerQuizzes } from "./quizzes.ts";
 import { registerEbooks } from "./ebooks.ts";
@@ -6,9 +7,9 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool, PoolClient } from "pg";
 import { fail, sessionTransaction, type Identity } from "./authorized.ts";
 
-export type Lesson = { id: string; title: string; type: string; resourceId?: string; relatedResourceIds?: string[]; releaseAt?: string; prerequisiteIds?: string[] };
+export type Lesson = { estimatedMinutes?:number; id: string; title: string; type: string; resourceId?: string; relatedResourceIds?: string[]; releaseAt?: string; prerequisiteIds?: string[] };
 export type Outline = {
-  title: string; examYear?: number; provinces?: string[];
+  title: string; exam?:string; examYear?: number; provinces?: string[];
   chapters: { id: string; title: string; lessons: Lesson[] }[];
 };
 type Course = { Params: { id: string } };
@@ -19,11 +20,11 @@ const object = (properties: Record<string, object>, required = Object.keys(prope
   ({ type: "object", properties, required, additionalProperties: false });
 const array = (items: object, maxItems: number) => ({ type: "array", items, maxItems });
 const params = object({ id: uuid });
-const lesson = object({ id: uuid, title, type: { enum: ["video","html_article","mcq_quiz","flashcard_review"] },
+const lesson = object({ estimatedMinutes:{type:"integer",minimum:1,maximum:1440}, id: uuid, title, type: { enum: ["video","html_article","mcq_quiz","flashcard_review"] },
   releaseAt: { type: "string", format: "date-time", pattern: "(Z|[+-][0-9]{2}:[0-9]{2})$" }, prerequisiteIds: { ...array(uuid, 64), uniqueItems: true },
   resourceId: uuid, relatedResourceIds: { ...array(uuid, 64), uniqueItems: true } }, ["id","title","type"]);
 const chapter = object({ id: uuid, title, lessons: array(lesson, 500) });
-const outlineSchema = object({ title, chapters: array(chapter, 200), examYear: { type: "integer", minimum: 2000, maximum: 9999 },
+const outlineSchema = object({ title, exam:title, chapters: array(chapter, 200), examYear: { type: "integer", minimum: 2000, maximum: 9999 },
   provinces: { ...array(title, 32), uniqueItems: true } }, ["title","chapters"]);
 const bodyLimit = 1024 * 1024;
 
@@ -97,5 +98,6 @@ export function registerCurriculum(app: FastifyInstance, db: Pool, principal: Id
   registerLearning(app, session, accessible);
   registerEbooks(app, session, academic, accessible);
   registerQuizzes(app, session, academic, accessible);
-  registerFlashcards(app, session, academic, accessible);
+  const revisionSummary=registerFlashcards(app, session, academic, accessible);
+  registerPlanner(app,session,academic,accessible,revisionSummary);
 }
