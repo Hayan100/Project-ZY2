@@ -73,6 +73,8 @@ Every newly verified transfer queues one email and one WhatsApp receipt in the p
 
 ## Curriculum authoring and publication
 
+In the course editor, academic staff can search `GET /api/v1/staff/courses/resources` by title with `q` and optionally filter `kind` to `ebook`, `quiz`, `deck` or `sheet`. Results contain the canonical ID, kind and title of published materials and academy reference sheets. Pass a returned `nextOffset` as `offset` for the next page. Use the chosen ID as the primary `resourceId` for an HTML Article, MCQ Quiz or Flashcard Review, respectively using an ebook, quiz or deck. Video lessons keep their video resource ID. For any lesson type, add or remove supplementary IDs in `relatedResourceIds`, save the versioned course draft, and publish it when ready. Multiple lessons can link to the same material.
+
 After migrating, apply `backend/curriculum-grants.sql` as database owner, including in the disposable integration database. Assign individual academic authors and publishers by inserting their existing staff user ID into `academic_staff`. This permission covers all course outlines.
 
 | Method and route | Behavior |

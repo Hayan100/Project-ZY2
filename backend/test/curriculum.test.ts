@@ -35,6 +35,11 @@ test("academic revisions publish atomically and follow current enrollment", { sk
   const sheetPath=inventory+"/courses/"+id+"/lessons/"+lesson.id+"/sheets/"+sheet.id;
   assert.equal((await request("POST",sheets,student,sheet)).statusCode,403);
   assert.equal((await request("POST",sheets,author,sheet)).statusCode,200);
+  const picker=staff+"/resources?kind=sheet&q="+encodeURIComponent(sheet.title.toUpperCase());
+  assert.equal((await request("GET",picker,student)).statusCode,403);
+  const choices=(await request("GET",picker,author)).json();
+  assert.ok(choices.resources.some((r:typeof sheet & {kind:string}) =>
+    r.kind==="sheet" && r.id===lesson.relatedResourceIds[0] && r.title===sheet.title && r.body===undefined));
   assert.equal((await request("POST",sheets,author,{...sheet,body:"different"})).statusCode,409);
   assert.equal((await create()).statusCode,201);
   assert.equal((await request("GET",detail,student)).statusCode,403);

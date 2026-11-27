@@ -62,11 +62,15 @@ test("lesson quizzes pin revisions, lock tutor answers, preserve omissions and e
   await enroll(courseKey);
   const workspace=lessonPath+lesson+"/workspace";
   assert.deepEqual((await read(workspace)).json().quizzes,[]);
+  const picker="staff/courses/resources?kind=quiz&q=lesson%20practice";
+  const quizChoices=async()=> (await request("GET",picker,staff)).json().resources as {id:string}[];
+  assert.ok(!(await quizChoices()).some(r=>r.id===quizId));
   assert.equal((await read(lessonPath+locked.id+"/workspace")).statusCode,403);
   const context="?courseId="+course+"&lessonId="+lesson;
   assert.equal((await request("PUT","ebooks/"+book+"/pages/"+page+"/reading"+context,student,{revision:1})).statusCode,200);
   assert.equal((await start(picked)).statusCode,404);
   assert.equal((await publish(1)).statusCode,200);
+  assert.ok((await quizChoices()).some(r=>r.id===quizId));
   assert.equal((await read(source(locked.id))).statusCode,403);
   assert.equal((await read(source(unrelated.id))).statusCode,404);
   assert.equal((await request("PUT",lessonPath+lesson+"/progress",student,{revision:1,version:0,position:{videoSeconds:61},completed:false})).statusCode,200);

@@ -34,6 +34,23 @@ async function saveRevision(tx: PoolClient, id: string, version: number, outline
 
 export function registerCourses(app: FastifyInstance, session: ReturnType<typeof sessionTransaction>, academic: Academic, accessible: string) {
   const staff = "/api/v1/staff/courses";
+  app.get<{ Querystring: { kind?:string; q?:string; offset?:number } }>(staff+"/resources", {
+    schema:{querystring:object({kind:{enum:["ebook","quiz","deck","sheet"]},q:{type:"string",maxLength:200},
+      offset:{type:"integer",minimum:0,maximum:2147483647}},[])}
+  }, req => academic(req, async tx => {
+    const {kind,q="",offset=0} = req.query;
+    const {rows} = await tx.query(`WITH resources(kind,id,title) AS (
+      SELECT 'ebook',b.id,r.manuscript->>'title' FROM ebooks b
+        JOIN ebook_revisions r ON (b.id,b.published_revision)=(r.book_id,r.revision)
+      UNION ALL SELECT 'quiz',quiz_id,quiz->>'title' FROM
+        (SELECT DISTINCT ON (quiz_id) quiz_id,quiz FROM quiz_revisions
+         WHERE published_at IS NOT NULL ORDER BY quiz_id,revision DESC) published_quizzes
+      UNION ALL SELECT 'deck',deck_id,deck->>'title' FROM published_decks
+      UNION ALL SELECT 'sheet',id,title FROM academy_sheets
+    ) SELECT kind,id,title FROM resources WHERE ($1::text IS NULL OR kind=$1)
+        AND strpos(lower(title),lower($2))>0 ORDER BY lower(title),kind,id LIMIT 51 OFFSET $3`,[kind,q.trim(),offset]);
+    return {resources:rows.slice(0,50),nextOffset:rows.length>50 ? offset+50 : null};
+  }));
   app.get(staff, req => academic(req, async tx => ({ courses: (await tx.query(`
     SELECT c.id,c.product_key AS "productKey",c.revision,c.published_revision AS "publishedRevision",r.outline->>'title' AS title
     FROM courses c JOIN course_revisions r ON (c.id,c.revision)=(r.course_id,r.revision) ORDER BY title,c.id`)).rows })));
