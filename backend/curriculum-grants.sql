@@ -87,6 +87,7 @@ GRANT SELECT ON student_reviews TO zy2_api;
 GRANT SELECT,INSERT,UPDATE ON ai_requests,ai_allowances TO zy2_api;
 GRANT SELECT,INSERT ON classes,class_attendance_edits,class_replay_views TO zy2_api;
 GRANT UPDATE(replay) ON classes TO zy2_api;
+GRANT SELECT,INSERT,UPDATE ON classroom_identity,classroom_network TO zy2_api;
 GRANT SELECT,INSERT,UPDATE ON class_presence,class_extensions TO zy2_api;
 GRANT SELECT,INSERT,UPDATE ON class_posts,class_votes TO zy2_api;
 GRANT SELECT,INSERT ON class_polls TO zy2_api;

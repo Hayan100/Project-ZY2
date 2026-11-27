@@ -1,10 +1,13 @@
 import type {FastifyInstance} from "fastify";
 import type {PoolClient} from "pg";
+import { youtubeClassPage } from "./youtube-class.ts";
+import {createHmac} from "node:crypto";
 import {fail,type Academic,type sessionTransaction} from "./authorized.ts";
 const uuid={type:"string",format:"uuid"},instant={type:"string",format:"date-time"};
 const text=(maxLength:number)=>({type:"string",pattern:"\\S",maxLength});
 const object=(properties:Record<string,object>,required=Object.keys(properties))=>({type:"object",properties,required,additionalProperties:false});
 const params=object({id:uuid});
+const viewingSession=(sessionId:string,classId:string)=>createHmac("sha256",sessionId).update(classId).digest("hex");
 type Path={Params:{id:string}};
 const eligible=`EXISTS(SELECT FROM enrollments e WHERE e.user_id=$1 AND e.product_key=c.product AND e.revoked_at IS NULL
   AND e.starts_at<=now() AND now()<e.ends_at) AND (c.batch IS NULL OR EXISTS(SELECT FROM active_planner_batches b
@@ -17,20 +20,21 @@ async function attendance(tx:PoolClient,id:string,student:string) {
     (SELECT first_open FROM class_replay_views WHERE class=$1 AND student=$2) AS "firstReplayOpen"`,[id,student]);
   return rows[0];
 }
-export function registerClassrooms(app:FastifyInstance,session:ReturnType<typeof sessionTransaction>,academic:Academic) {
+export function registerClassrooms(app:FastifyInstance,session:ReturnType<typeof sessionTransaction>,academic:Academic,origin:string) {
   const base="/api/v1/classes",staff="/api/v1/staff/classes";
   async function active(tx:PoolClient,student:string,id:string) {
-    return (await tx.query(`SELECT c.kind,c.opens,c.closes FROM classes c WHERE c.id=$2 AND now()>=c.opens AND now()<c.closes AND ${eligible}`,
+    return (await tx.query(`SELECT c.kind,c.title,c.youtube_video_id,c.youtube_state,c.opens,c.closes FROM classes c WHERE c.id=$2 AND now()>=c.opens AND now()<c.closes AND ${eligible}`,
       [student,id])).rows[0]??fail(403);
   }
   app.post<Path>(base+"/:id/join",{schema:{params}},async req=>{
-    const seat=await session(req,async(tx,a)=>({student:a.id,session:a.session,kind:(await active(tx,a.id,req.params.id)).kind}));
+    const seat=await session(req,async(tx,a)=>({student:a.id,session:a.session,room:await active(tx,a.id,req.params.id)}));
+    if(seat.room.youtube_video_id) return {provider:"youtube",joinUrl:base+"/"+req.params.id+"/watch",recording:null};
     if(!process.env.CLASSROOM_JOIN_URL) return fail(503);
     let joinUrl:string;
     try {
       const response=await fetch(process.env.CLASSROOM_JOIN_URL,{method:"POST",signal:AbortSignal.timeout(8000),redirect:"error",
         headers:{"Content-Type":"application/json",...(process.env.CLASSROOM_TOKEN?{Authorization:"Bearer "+process.env.CLASSROOM_TOKEN}:{})},
-        body:JSON.stringify({classId:req.params.id,student:seat.student,kind:seat.kind,record:true})});
+        body:JSON.stringify({classId:req.params.id,student:seat.student,kind:seat.room.kind,record:true})});
       if(!response.ok) return fail(503);
       const join=await response.json();
       if(join?.recording!==true || typeof join.joinUrl!=="string" || new URL(join.joinUrl).protocol!=="https:") return fail(503);
@@ -76,19 +80,39 @@ export function registerClassrooms(app:FastifyInstance,session:ReturnType<typeof
       AND jsonb_array_length(p.choices)>$3 ON CONFLICT(poll,student) DO UPDATE SET choice=excluded.choice RETURNING choice`,
       [req.params.poll,a.id,req.body.choice,req.params.id])).rows[0]??fail(409);
   }));
-  type Class={id:string;product:string;batch?:string;title:string;kind:"broadcast"|"interactive";opens:string;closes:string};
+  app.get<Path>(base+"/:id/watch",{schema:{params}},async(req,reply)=>{
+    if(!origin || req.host!==new URL(origin).host) fail(403);
+    const page=await session(req,async(tx,a)=>{
+      const room=await active(tx,a.id,req.params.id);
+      if(!room.youtube_video_id) fail(404);
+      const {rows:[viewer]}=await tx.query(`SELECT u.name,u.email,i.phone FROM "user" u LEFT JOIN classroom_identity i ON i.student=u.id WHERE u.id=$1`,[a.id]);
+      return youtubeClassPage(room.title,viewer,origin,room.youtube_state==="live"?room.youtube_video_id:null,viewingSession(a.session,req.params.id));
+    });
+    return reply.header("Content-Security-Policy",page.policy)
+      .header("Referrer-Policy","strict-origin-when-cross-origin").type("text/html; charset=utf-8").send(page.html);
+  });
+  app.put<Path & {Body:{phone:string}}>(base+"/:id/watermark-phone",{schema:{params,body:object({phone:{type:"string",pattern:"^\\+[1-9][0-9]{7,14}$"}})}},req=>session(req,async(tx,a)=>{
+    const room=await active(tx,a.id,req.params.id);
+    if(!room.youtube_video_id) fail(404);
+    await tx.query("INSERT INTO classroom_identity VALUES ($1,$2) ON CONFLICT(student) DO UPDATE SET phone=excluded.phone",[a.id,req.body.phone]);
+    return {saved:true};
+  }));
+  type Class={id:string;product:string;batch?:string;title:string;kind:"broadcast"|"interactive";opens:string;closes:string;youtubeVideoId?:string};
   app.post<{Body:Class}>(staff,{schema:{body:object({id:uuid,product:text(120),batch:uuid,title:text(200),kind:{enum:["broadcast","interactive"]},
-    opens:instant,closes:instant},["id","product","title","kind","opens","closes"])}},req=>academic(req,async(tx,a)=>{
+    opens:instant,closes:instant,youtubeVideoId:{type:"string",pattern:"^[A-Za-z0-9_-]{11}$",maxLength:11}},["id","product","title","kind","opens","closes"])}},req=>academic(req,async(tx,a)=>{
     const b=req.body;
     if(Date.parse(b.opens)>=Date.parse(b.closes)) fail(422);
-    await tx.query("INSERT INTO classes(id,product,batch,title,kind,opens,closes,author) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-      [b.id,b.product,b.batch,b.title,b.kind,b.opens,b.closes,a]);
+    if(b.youtubeVideoId && b.kind!=="broadcast") fail(422);
+    await tx.query("INSERT INTO classes(id,product,batch,title,kind,opens,closes,author,youtube_video_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+      [b.id,b.product,b.batch,b.title,b.kind,b.opens,b.closes,a,b.youtubeVideoId??null]);
     return {id:b.id,recordingRequired:true};
   }));
   app.get(base,req=>session(req,async(tx,a)=>({classes:(await tx.query(`SELECT c.id,c.title,c.kind,c.opens,c.closes,true AS "recordingRequired",
     c.replay IS NOT NULL AND now()>=c.closes AS "replayAvailable" FROM classes c WHERE (${eligible}) OR
     (c.replay IS NOT NULL AND now()>=c.closes AND ${extended}) ORDER BY c.opens,c.id`,[a.id])).rows})));
   app.post<Path>(base+"/:id/presence",{schema:{params}},req=>session(req,async(tx,a)=>{
+    const expected=req.headers["x-class-session"];
+    if(expected!==undefined && expected!==viewingSession(a.session,req.params.id)) fail(403);
     // Join establishes a timestamp. Subsequent online heartbeats confirm only short contiguous intervals.
     const result=await tx.query(`INSERT INTO class_presence(class,student,last_seen)
       SELECT c.id,$1,now() FROM classes c WHERE c.id=$2 AND c.opens<=now() AND now()<c.closes AND ${eligible}
@@ -96,7 +120,15 @@ export function registerClassrooms(app:FastifyInstance,session:ReturnType<typeof
         AND excluded.last_seen-class_presence.last_seen<=interval '60 seconds'
         THEN tstzmultirange(tstzrange(class_presence.last_seen,excluded.last_seen)) ELSE '{}'::tstzmultirange END,
         last_seen=greatest(class_presence.last_seen,excluded.last_seen) RETURNING last_seen`,[a.id,req.params.id]);
-    return result.rows[0]??fail(403);
+    if(!result.rowCount) fail(403);
+    const network=createHmac("sha256",a.session).update(req.ip).digest("hex");
+    await tx.query(`INSERT INTO classroom_network AS n(session_id,last_network,seen) VALUES ($1,$2,now())
+      ON CONFLICT(session_id) DO UPDATE SET last_network=excluded.last_network,seen=now(),
+      prior_network=CASE WHEN n.last_network<>excluded.last_network THEN n.last_network ELSE n.prior_network END,
+      prior_seen=CASE WHEN n.last_network<>excluded.last_network THEN n.seen ELSE n.prior_seen END,
+      flagged_at=CASE WHEN n.last_network<>excluded.last_network AND n.prior_network=excluded.last_network
+        AND n.prior_seen>now()-interval '90 seconds' THEN now() ELSE n.flagged_at END`,[a.session,network]);
+    return result.rows[0];
   }));
   app.get<Path>(base+"/:id/attendance",{schema:{params}},req=>session(req,(tx,a)=>attendance(tx,req.params.id,a.id)));
   app.get<{Params:{id:string;student:string}}>("/api/v1/mentor/classes/:id/attendance/:student",{schema:{params:object({id:uuid,student:text(200)})}},

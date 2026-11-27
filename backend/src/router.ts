@@ -44,7 +44,7 @@ export function registerRoutes(app: FastifyInstance, db: Pool, principal: Identi
   registerLearning(app, session, accessible);
   const bookFor = registerEbooks(app, session, academic, accessible);
   registerStudyAssistant(app,session,academic,bookFor);
-  registerClassrooms(app,session,academic);
+  registerClassrooms(app,session,academic,origin);
   registerAdmissions(app,session);
   registerDiscovery(app,session,accessible);
   registerSamples(app,session,academic);

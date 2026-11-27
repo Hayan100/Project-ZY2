@@ -13,7 +13,8 @@
     "check": "tsc --noEmit",
     "test": "node --test test/*.test.ts",
     "receipts": "node --env-file-if-exists=.env src/receipt-worker.ts",
-    "campaigns": "node --env-file-if-exists=.env src/campaign-worker.ts"
+    "campaigns": "node --env-file-if-exists=.env src/campaign-worker.ts",
+    "youtube-classes": "node --env-file-if-exists=.env src/youtube-worker.ts"
   },
   "dependencies": {
     "@fastify/helmet": "^13.2.0",
