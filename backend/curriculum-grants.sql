@@ -64,3 +64,6 @@ GRANT UPDATE(appeal,decision,reviewer,overturned) ON community_actions TO zy2_ap
 GRANT SELECT ON support_reviewers TO zy2_api;
 GRANT SELECT,INSERT ON support_tickets,support_events TO zy2_api;
 GRANT UPDATE(assignee,escalated,resolved,version,updated_at) ON support_tickets TO zy2_api;
+GRANT SELECT,INSERT ON feature_suggestions,feature_votes TO zy2_api;
+GRANT UPDATE(status,version,reviewed_by) ON feature_suggestions TO zy2_api;
+GRANT DELETE ON feature_votes TO zy2_api;

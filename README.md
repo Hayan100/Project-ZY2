@@ -306,3 +306,14 @@ Community returns the ticket inbox as its default support destination. A verifie
 | Track or review | GET `/support/tickets` for your own tickets or `/staff/support/tickets` for your assigned categories. Append `/:id` for the description and chronological history. |
 | Work a ticket | POST `/:id/events` under either inbox with the current `version`, an `action`, and a student-visible `message`. Students can reply or reopen. Eligible staff can also claim, escalate or resolve. A claim transfers assignment and records who took over. Escalation releases the assignment to the senior queue and requires another eligible senior reviewer. |
 | Handle a conflict | A stale edit returns 409. Refresh the thread before revising the request. Repeating an identical accepted event returns its recorded version while the caller retains access. |
+
+### Feature suggestion board
+
+Community exposes the board through `featureBoard`. Apply migration 16 and the curriculum grants. Verified accounts can participate without paid enrollment. The board uses the existing Community access restrictions and moderator assignments. Only the author and moderators see submitted or declined ideas. The shared board displays vote totals and the caller’s own vote.
+
+| Action | API under `/api/v1` |
+| --- | --- |
+| Submit an idea | POST `/feature-suggestions` with a client UUID `id`, `title`, and `description`. An identical retry returns the existing suggestion. |
+| Browse | GET `/feature-suggestions`. Moderators can GET `/staff/feature-suggestions` to include all submissions. Use the response’s `next` UUID as `?after=` for the next page. |
+| Vote or withdraw | PUT `/feature-suggestions/:id/vote` with `{"voted":true}` or `{"voted":false}`. Each account has one vote per published idea. |
+| Review | A Community moderator PUTs `/staff/feature-suggestions/:id/status` with the current `version` and a `status` of `under_review`, `planned`, `in_progress`, `delivered`, or `declined`. The first four statuses publish the idea. Refresh after a 409 stale update. |
